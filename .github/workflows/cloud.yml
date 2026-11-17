@@ -1,0 +1,29 @@
+name: Cloud CRM checks
+on:
+  push:
+    branches: [main]
+    paths: ['cloud/**', '.github/workflows/cloud.yml']
+  pull_request:
+    paths: ['cloud/**', '.github/workflows/cloud.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
