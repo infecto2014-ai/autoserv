@@ -27,8 +27,17 @@ async function saved(page: Page) {
 }
 test("клиент → автомобиль → осмотр → заказ → PDF → история и права мастера", async ({
   page,
+  context,
 }, testInfo) => {
   test.setTimeout(180000);
+  const externalRequests: string[] = [];
+  await context.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+      externalRequests.push(url.origin);
+      await route.abort();
+    } else await route.continue();
+  });
   const suffix = Date.now().toString(),
     customer = `Тест клиента ${suffix}`,
     plate = `ТЕСТ${suffix.slice(-6)}`,
@@ -174,9 +183,11 @@ test("клиент → автомобиль → осмотр → заказ → 
   ).toBeVisible();
   await page.getByRole("dialog").getByRole("link").click();
   await expect(page).toHaveURL(orderUrl);
-  await expect(page.getByRole('heading',{name:/Заказ-наряд №/})).toBeVisible();
-  await page.getByLabel('Поиск',{exact:true}).fill('Масло моторное');
-  await expect(page.getByText('Масло моторное',{exact:true})).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Заказ-наряд №/ }),
+  ).toBeVisible();
+  await page.getByLabel("Поиск", { exact: true }).fill("Масло моторное");
+  await expect(page.getByText("Масло моторное", { exact: true })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("desktop-1366.png"),
     fullPage: false,
@@ -221,4 +232,8 @@ test("клиент → автомобиль → осмотр → заказ → 
   await expect(
     page.getByRole("button", { name: "Сохранить строки" }),
   ).toHaveCount(0);
+  expect(
+    externalRequests,
+    "CRM must work without external browser requests",
+  ).toEqual([]);
 });
