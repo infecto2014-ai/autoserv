@@ -1,0 +1,236 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum Role {
+  ADMIN
+  RECEPTION
+  MASTER
+}
+enum OrderStatus {
+  NEW
+  DIAGNOSTICS
+  APPROVAL
+  IN_PROGRESS
+  READY
+  DELIVERED
+  CANCELLED
+}
+enum Condition {
+  UNCHECKED
+  CHECKED
+  REPAIR
+  RECOMMENDED
+  DONE
+}
+enum PartVariant {
+  NONE
+  ORIGINAL
+  ANALOG
+  CUSTOM
+}
+enum LineKind {
+  LABOR
+  PART
+}
+enum DocumentKind {
+  INSPECTION
+  WORK_ORDER
+}
+model User {
+  id String @id @default(cuid())
+  name String
+  email String @unique
+  passwordHash String
+  authVersion Int @default(0)
+  role Role @default(MASTER)
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  sessions Session[]
+  orders WorkOrder[] @relation("AssignedMaster")
+  authoredInspections InspectionItem[]
+  documents Document[]
+  audit AuditEvent[]
+}
+model Session {
+  authVersion Int @default(0)
+  id String @id
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Restrict)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([expiresAt])
+}
+model LoginThrottle {
+  id String @id
+  attempts Int @default(0)
+  resetAt DateTime
+}
+model Customer {
+  id String @id @default(cuid())
+  kind String @default("PERSON")
+  name String
+  phone String
+  phoneNormalized String
+  email String?
+  comment String @default("")
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  vehicles Vehicle[]
+  ownerships VehicleOwnership[]
+  orders WorkOrder[]
+  @@index([phoneNormalized])
+  @@index([name])
+}
+model Vehicle {
+  id String @id @default(cuid())
+  customerId String
+  customer Customer @relation(fields:[customerId],references:[id], onDelete:Restrict)
+  make String
+  model String
+  year Int?
+  vin String? @unique
+  plate String?
+  mileage Int @default(0)
+  engine String @default("")
+  comment String @default("")
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ownerships VehicleOwnership[]
+  orders WorkOrder[]
+  @@index([customerId])
+  @@index([plate])
+}
+model VehicleOwnership {
+  id String @id @default(cuid())
+  vehicleId String
+  vehicle Vehicle @relation(fields:[vehicleId],references:[id],onDelete:Restrict)
+  customerId String
+  customer Customer @relation(fields:[customerId],references:[id],onDelete:Restrict)
+  startedAt DateTime @default(now())
+  endedAt DateTime?
+  @@index([vehicleId,startedAt])
+}
+model WorkOrder {
+  id String @id @default(cuid())
+  number String @unique
+  customerId String
+  customer Customer @relation(fields:[customerId],references:[id],onDelete:Restrict)
+  vehicleId String
+  vehicle Vehicle @relation(fields:[vehicleId],references:[id],onDelete:Restrict)
+  masterId String?
+  master User? @relation("AssignedMaster",fields:[masterId],references:[id],onDelete:Restrict)
+  status OrderStatus @default(NEW)
+  mileage Int
+  complaint String
+  recommendations String @default("")
+  comment String @default("")
+  discountCents Int @default(0)
+  paidCents Int @default(0)
+  version Int @default(0)
+  openedAt DateTime @default(now())
+  closedAt DateTime?
+  updatedAt DateTime @updatedAt
+  inspectionItems InspectionItem[]
+  lines OrderLine[]
+  documents Document[]
+  @@index([vehicleId,openedAt])
+  @@index([customerId])
+  @@index([status,openedAt])
+  @@index([masterId,status])
+}
+model CatalogItem {
+  id String @id @default(cuid())
+  category String
+  name String
+  unit String @default("шт.")
+  laborPriceCents Int @default(0)
+  active Boolean @default(true)
+  sortOrder Int @default(0)
+  inspectionItems InspectionItem[]
+  @@unique([category,name])
+}
+model InspectionItem {
+  id String @id @default(cuid())
+  orderId String
+  order WorkOrder @relation(fields:[orderId],references:[id],onDelete:Restrict)
+  catalogItemId String?
+  catalogItem CatalogItem? @relation(fields:[catalogItemId],references:[id],onDelete:Restrict)
+  category String
+  name String
+  left Boolean @default(false)
+  right Boolean @default(false)
+  condition Condition @default(UNCHECKED)
+  quantityMilli Int @default(1000)
+  laborPriceCents Int @default(0)
+  originalPriceCents Int @default(0)
+  analogPriceCents Int @default(0)
+  customPriceCents Int @default(0)
+  selectedPart PartVariant @default(NONE)
+  note String @default("")
+  authorId String
+  author User @relation(fields:[authorId],references:[id],onDelete:Restrict)
+  updatedAt DateTime @updatedAt
+  lines OrderLine[]
+  @@index([orderId])
+  @@unique([orderId,catalogItemId])
+}
+model OrderLine {
+  id String @id @default(cuid())
+  orderId String
+  order WorkOrder @relation(fields:[orderId],references:[id],onDelete:Restrict)
+  inspectionItemId String?
+  inspectionItem InspectionItem? @relation(fields:[inspectionItemId],references:[id],onDelete:Restrict)
+  kind LineKind
+  name String
+  quantityMilli Int @default(1000)
+  unitPriceCents Int
+  variant PartVariant @default(NONE)
+  article String @default("")
+  @@index([orderId])
+  @@unique([orderId,inspectionItemId,kind])
+}
+model Document {
+  id String @id @default(cuid())
+  orderId String
+  order WorkOrder @relation(fields:[orderId],references:[id],onDelete:Restrict)
+  number String @unique
+  kind DocumentKind
+  version Int
+  templateVersion String @default("1.0")
+  snapshot Json
+  pdf Bytes
+  sha256 String
+  authorId String
+  author User @relation(fields:[authorId],references:[id],onDelete:Restrict)
+  createdAt DateTime @default(now())
+  @@unique([orderId,kind,version])
+}
+model ServiceSettings {
+  id String @id @default("main")
+  name String @default("Автосервис")
+  address String @default("")
+  phone String @default("")
+  taxId String @default("")
+  timezone String @default("Europe/Kaliningrad")
+}
+model Sequence {
+  id String @id
+  value Int @default(0)
+}
+model AuditEvent {
+  id String @id @default(cuid())
+  actorId String
+  actor User @relation(fields:[actorId],references:[id],onDelete:Restrict)
+  action String
+  entityType String
+  entityId String
+  data Json
+  createdAt DateTime @default(now())
+  @@index([entityType,entityId,createdAt])
+}
