@@ -18,7 +18,7 @@ export function calculateWorkflowTotals(
   );
   const gross = calculateTotals(billable);
   validInteger(discountCents);
-  validInteger(paidCents);
+  validInteger(paidCents, Number.MAX_SAFE_INTEGER);
   if (discountCents > gross.laborCents)
     throw new Error("Скидка превышает стоимость работ");
 

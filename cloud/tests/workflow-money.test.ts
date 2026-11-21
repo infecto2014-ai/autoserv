@@ -45,6 +45,15 @@ describe("расчёт согласованного заказа", () => {
     expect(calculateWorkflowTotals([line("PART", 300, { partSource: undefined })]).totalCents).toBe(0);
   });
 
+  it("учитывает накопленную оплату и переплату в пределах безопасного целого", () => {
+    const paidCents = 600_000_000 + 600_000_000;
+    expect(calculateWorkflowTotals([line("LABOR", 200)], 0, paidCents)).toMatchObject({
+      paidCents: 1_200_000_000, balanceCents: 0, overpaidCents: 1_199_999_800,
+    });
+    expect(() => calculateWorkflowTotals([], 0, Number.MAX_SAFE_INTEGER + 1)).toThrow();
+    expect(() => calculateWorkflowTotals([], 0, -1)).toThrow();
+  });
+
   it("распределяет целые копейки детерминированно с сохранением суммы", () => {
     expect(allocatePayment(1, 1, 1)).toEqual({ laborCents: 1, partsCents: 0, unallocatedCents: 0 });
     expect(allocatePayment(1, 1, 2)).toEqual({ laborCents: 0, partsCents: 1, unallocatedCents: 0 });
