@@ -2,6 +2,9 @@ import {ZodError} from 'zod';
 import {actorFromRequest,ensureDefaults} from './auth';
 import {HttpError,fail,json} from './common';
 import {first} from './db';
+import {overview} from './overview';
+import {postPayment} from './payments';
+import {intake} from './intake';
 import {handleCrud} from './crud';
 import {handleOrders} from './orders';
 import {handleDocuments,type FontBytes} from './documents';
@@ -22,6 +25,10 @@ export async function handleApi(request:Request,env:Env,fonts:FontBytes):Promise
   if(url.pathname==='/api/health'&&request.method==='GET'){await first(env.DB,'SELECT 1 AS ok');return json({service:'sto-crm-cloud',status:'ok'});}
   const match=url.pathname.match(/^\/api\/(?:orders|documents|customers|vehicles|staff|catalog)\/([^/]+)/);
   const ctx:Context={request,env,actor,params:match?{id:decodeURIComponent(match[1])}:{}};
+  if(url.pathname==='/api/overview' && request.method==='GET')return await overview(ctx);
+  const paymentPath=/^\/api\/orders\/([^/]+)\/payments\/?$/.exec(url.pathname);
+  if(paymentPath && request.method==='POST')return await postPayment(ctx,decodeURIComponent(paymentPath[1]));
+  if(url.pathname==='/api/intake' && request.method==='POST')return await intake(ctx);
   return await handleDocuments(ctx,fonts)??await handleOrders(ctx)??await handleCrud(ctx)??json({error:'Маршрут не найден'},404);
  }catch(error){
   if(error instanceof HttpError)return json({error:error.message},error.status);

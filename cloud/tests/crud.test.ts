@@ -13,7 +13,7 @@ async function request(path:string, method='GET', data?:unknown, actor=admin): P
 }
 async function customer(name='Owner') {return request('customers','POST',{kind:'PERSON',name,phone:'+7 (900) 123-45-67',email:'owner@example.com',comment:'private'});}
 async function vehicle(customerId:string) {return request('vehicles','POST',{customerId,make:'Toyota',model:'Camry',mileage:1000,vin:'ABCDE12345',comment:'vehicle private'});}
-async function order(customerId:string,vehicleId:string,id='order',masterId:string|null='master') {await run(db,'INSERT INTO WorkOrder (id,number,customerId,vehicleId,masterId,mileage,complaint,discountCents,paidCents) VALUES (?,?,?,?,?,?,?, ?, ?)',[id,id,customerId,vehicleId,masterId,1000,'Noise',100,200]);await run(db,"INSERT INTO OrderLine (id,orderId,kind,name,quantityMilli,unitPriceCents) VALUES (?,?,'LABOR','Work',1000,1000)",[id+'line',id]);}
+async function order(customerId:string,vehicleId:string,id='order',masterId:string|null='master') {await run(db,'INSERT INTO WorkOrder (id,number,customerId,vehicleId,masterId,mileage,complaint,discountCents,paidCents) VALUES (?,?,?,?,?,?,?, ?, ?)',[id,id,customerId,vehicleId,masterId,1000,'Noise',100,200]);await run(db,"INSERT INTO OrderLine (id,orderId,kind,name,quantityMilli,unitPriceCents,approval) VALUES (?,?,'LABOR','Work',1000,1000,'APPROVED')",[id+'line',id]);await run(db,"INSERT INTO Payment (id,orderId,kind,amountCents,laborCents,partsCents,unallocatedCents,occurredAt,actorId) VALUES (?,?,'PAYMENT',200,200,0,0,'2026-01-01T12:00:00.000Z','admin')",[id+'payment',id]);}
 beforeEach(async()=>{db=createTestDB();for(const actor of [admin,master]) await run(db,'INSERT INTO User (id,name,email,role,providerId) VALUES (?,?,?,?,?)',[actor.id,actor.name,actor.email,actor.role,actor.id+'provider']);await run(db,"INSERT INTO ServiceSettings (id) VALUES ('main')");});
 afterEach(()=>db.close());
 describe('D1 CRM CRUD',()=>{
@@ -24,4 +24,21 @@ describe('D1 CRM CRUD',()=>{
  it('keeps D1 parameter counts under 100 for a full master vehicle page',async()=>{for(let n=0;n<100;n++){const c=await customer('Owner'+n);const v=await request('vehicles','POST',{customerId:c.id,make:'Car',model:'Model',mileage:1000});await order(c.id,v.id,'pageOrder'+n);}const original=db.prepare.bind(db);db.prepare=(sql:string)=>{const statement=original(sql);const bind=statement.bind.bind(statement);statement.bind=(...values:unknown[])=>{expect(values.length).toBeLessThanOrEqual(100);return bind(...values);};return statement;};const page=await request('vehicles?pageSize=100','GET',undefined,master);expect(page.items).toHaveLength(100);expect(page.total).toBe(100);});
  it('loads long histories in a fixed number of SQL queries',async()=>{const c=await customer(),v=await vehicle(c.id);for(let n=0;n<60;n++) await order(c.id,v.id,'order'+n);let queries=0;const original=db.prepare.bind(db);db.prepare=(sql:string)=>{queries++;return original(sql);};const detail=await request('customers/'+c.id);expect(detail.orders).toHaveLength(60);expect(queries).toBeLessThan(15);});
  it('bounds money, preserves inspection snapshots, validates settings and enforces RBAC',async()=>{const item=await request('catalog','POST',{category:'ТО',name:'Inspection',laborPriceCents:100});expect(item.active).toBe(true);const c=await customer(),v=await vehicle(c.id);await order(c.id,v.id);await run(db,"INSERT INTO InspectionItem (id,orderId,catalogItemId,category,name,laborPriceCents,authorId) VALUES ('snapshot','order',?,'ТО','Inspection',100,'admin')",[item.id]);await request('catalog/'+item.id,'PATCH',{laborPriceCents:200,active:false});expect((await request('catalog')).items[0].active).toBe(false);expect((await first<any>(db,"SELECT laborPriceCents FROM InspectionItem WHERE id='snapshot'"))?.laborPriceCents).toBe(100);await expect(request('catalog','POST',{category:'ТО',name:'Other',laborPriceCents:1e9+1})).rejects.toThrow();await expect(request('settings','PATCH',{timezone:'Mars/Base'})).rejects.toThrow();expect((await request('settings','PATCH',{timezone:'UTC'})).timezone).toBe('UTC');await expect(request('settings','GET',undefined,master)).rejects.toBeInstanceOf(HttpError);await expect(request('catalog','POST',{category:'ТО',name:'No'},master)).rejects.toMatchObject({status:403});});
+});
+
+it('creates a directory-only master by name and searches client and vehicle visits in local dates',async()=>{
+  const {actorFromRequest}=await import('../worker/auth');
+  const entry=await request('staff','POST',{name:'Иван'});
+  expect(entry).toMatchObject({role:'MASTER',active:true,email:''});
+  const stored=await first<{email:string}>(db,'SELECT email FROM User WHERE id=?',[entry.id]);
+  await expect(actorFromRequest(new Request('https://crm.test/api/orders',{headers:{'oai-authenticated-user-id':'unknown','oai-authenticated-user-email':stored!.email}}),{DB:db})).rejects.toMatchObject({status:403});
+  const c=await customer(),v=await vehicle(c.id); await order(c.id,v.id,'known-visit');
+  await run(db,"UPDATE WorkOrder SET openedAt='2026-10-31T22:00:00.000Z' WHERE id='known-visit'");
+  for(const resource of ['customers','vehicles']) {
+    for(const q of ['Camry','7900123','known-visit']) {
+      expect(await request(resource+'?q='+q+'&from=2026-11-01&to=2026-11-01')).toMatchObject({total:1});
+    }
+    expect(await request(resource+'?to=2026-10-31')).toMatchObject({total:0});
+  }
+  expect((await request('vehicles/'+v.id+'?to=2026-10-31')).orders).toEqual([]);
 });

@@ -19,7 +19,8 @@ describe('cloud complete API workflow',()=>{
    expect(order.inspectionItems).toHaveLength(110);
    const item=order.inspectionItems[0];
    order=await api<OrderDetail>(`/api/orders/${order.id}/inspection`,'PUT',{version:order.version,recommendations:'Повторить проверку через месяц',items:order.inspectionItems.map(x=>x.id===item.id?{...x,left:true,right:true,condition:'REPAIR',quantityMilli:1500,laborPriceCents:12001,originalPriceCents:30003,analogPriceCents:20002,selectedPart:'ANALOG'}:x)});
-   order=await api<OrderDetail>(`/api/orders/${order.id}/transfer`,'POST',{version:order.version,inspectionItemIds:[item.id]});expect(order.totals.totalCents).toBe(48005);
+   order=await api<OrderDetail>(`/api/orders/${order.id}/transfer`,'POST',{version:order.version,inspectionItemIds:[item.id]});expect(order.totals.totalCents).toBe(0);
+   order=await api<OrderDetail>(`/api/orders/${order.id}/lines`,'PUT',{version:order.version,lines:order.lines.map(l=>({...l,approval:'APPROVED'}))});expect(order.totals.totalCents).toBe(48005);
    const docs:{id:string;sha256:string;number:string}[]=[];
    for(const kind of ['INSPECTION','WORK_ORDER']){
     docs.push(await api(`/api/orders/${order.id}/documents`,'POST',{version:order.version,kind},201));
@@ -31,7 +32,7 @@ describe('cloud complete API workflow',()=>{
     const r=await handleApi(req(`/api/documents/${doc.id}`),{DB:db},fonts);expect(r.status).toBe(200);
     const bytes=new Uint8Array(await r.arrayBuffer());expect(new TextDecoder().decode(bytes.slice(0,4))).toBe('%PDF');
     const hash=await crypto.subtle.digest('SHA-256',bytes);expect(Array.from(new Uint8Array(hash),x=>x.toString(16).padStart(2,'0')).join('')).toBe(doc.sha256);
-    const saved=db.sqlite.prepare('SELECT snapshot FROM Document WHERE id=?').get(doc.id) as {snapshot:string};expect(JSON.parse(saved.snapshot).settings.name).toBe('Автосервис');
+    const saved=db.sqlite.prepare('SELECT snapshot FROM Document WHERE id=?').get(doc.id) as {snapshot:string};expect(JSON.parse(saved.snapshot).settings.name).toBe('TOP-СЕРВИС');
    }
    const history=await api<{orders:{id:string}[]}>(`/api/vehicles/${car.id}`);expect(history.orders[0].id).toBe(order.id);
    expect((await handleApi(new Request('https://crm.test/api/orders'),{DB:db},fonts)).status).toBe(401);

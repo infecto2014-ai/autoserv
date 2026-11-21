@@ -51,6 +51,8 @@ describe('D1 orders on real SQLite', () => {
     order = await call('PUT', `/orders/${order.id}/inspection`, {version: order.version, items, recommendations: 'Заменить'});
     order = await call('POST', `/orders/${order.id}/transfer`, {version: order.version, inspectionItemIds: [target.id, target.id]});
     expect(order.lines).toHaveLength(2);
+    expect(order.totals.totalCents).toBe(0);
+    order = await call('PUT', `/orders/${order.id}/lines`, {version:order.version,lines:order.lines.map(l=>({...l,approval:'APPROVED'}))});
     expect(order.totals).toMatchObject({laborCents: 18518, partsCents: 30002, totalCents: 48520});
     const listed = await call<{items: OrderDetail[]}>('GET', '/orders');
     expect(listed.items[0].totals).toEqual(order.totals);
@@ -73,6 +75,8 @@ describe('D1 orders on real SQLite', () => {
     order = await call('POST', `/orders/${order.id}/transfer`, {version: order.version, inspectionItemIds: [target.id]});
     order = await call('PUT', `/orders/${order.id}/lines`, {version: order.version, lines: [{...order.lines[0], quantityMilli: 2000}, {kind: 'PART', name: 'Масло', quantityMilli: 1000, unitPriceCents: 40000}]});
     expect(order.lines.find(x => x.kind === 'LABOR')?.inspectionItemId).toBe(target.id);
+    expect(order.totals.totalCents).toBe(0);
+    order = await call('PUT', `/orders/${order.id}/lines`, {version:order.version,lines:order.lines.map(l=>({...l,approval:'APPROVED'}))});
     expect(order.totals.totalCents).toBe(64690);
     await expect(call('PUT', `/orders/${order.id}/lines`, {version: order.version, lines: [order.lines[0], order.lines[0]]})).rejects.toMatchObject({status: 422});
     await expect(call('PUT', `/orders/${order.id}/lines`, {version: order.version, lines: [{kind: 'LABOR', name: 'Неверно', quantityMilli: 1000, unitPriceCents: 100, variant: 'ORIGINAL'}]})).rejects.toMatchObject({status: 422});
@@ -106,20 +110,17 @@ describe('D1 orders on real SQLite', () => {
     expect((await call<{items: OrderDetail[]}>('GET', '/orders', undefined, other)).items).toEqual([]);
   });
 
-  it('checks status progression, payment, cancellation and immutable completed orders', async () => {
+  it('allows direct status changes, requires the delivery action and preserves the original date in late edits', async () => {
     let order = await create();
     order = await call('PUT', `/orders/${order.id}/lines`, {version: order.version, lines: [{kind: 'LABOR', name: 'Ремонт', quantityMilli: 1000, unitPriceCents: 50000}]});
-    await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, status: 'READY'})).rejects.toMatchObject({status: 422});
     await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, discountCents: 50001})).rejects.toMatchObject({status: 422});
-    for (const status of ['DIAGNOSTICS', 'APPROVAL', 'IN_PROGRESS', 'READY']) order = await call('PATCH', `/orders/${order.id}`, {version: order.version, status}, master);
+    for (const status of ['APPROVAL', 'READY']) order = await call('PATCH', `/orders/${order.id}`, {version: order.version, status}, master);
     await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, status: 'DELIVERED'}, master)).rejects.toMatchObject({status: 422});
     await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, status: 'DELIVERED'})).rejects.toMatchObject({status: 422});
-    order = await call('PATCH', `/orders/${order.id}`, {version: order.version, paidCents: 50000});
-    await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, status: 'CANCELLED'})).rejects.toMatchObject({status: 422});
-    await expect(call('PUT', `/orders/${order.id}/lines`, {version: order.version, lines: []})).rejects.toMatchObject({status: 422});
-    order = await call('PATCH', `/orders/${order.id}`, {version: order.version, status: 'DELIVERED'});
-    expect(order.closedAt).toBeTruthy();
-    await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, comment: 'Правка'})).rejects.toMatchObject({status: 409});
+    await expect(call('PATCH', `/orders/${order.id}`, {version: order.version, paidCents: 50000})).rejects.toMatchObject({status: 422});
+    db.sqlite.prepare("UPDATE WorkOrder SET status='DELIVERED',closedAt='2026-01-01T00:00:00.000Z' WHERE id=?").run(order.id);
+    order = await call('PATCH', `/orders/${order.id}`, {version:order.version,comment:'Правка'});
+    expect(order.closedAt).toBe('2026-01-01T00:00:00.000Z');
     let cancelled = await create();
     cancelled = await call('PATCH', `/orders/${cancelled.id}`, {version: cancelled.version, status: 'CANCELLED'});
     await expect(call('PUT', `/orders/${cancelled.id}/lines`, {version: cancelled.version, lines: []})).rejects.toMatchObject({status: 409});
@@ -156,16 +157,12 @@ describe('D1 orders on real SQLite', () => {
     expect(db.sqlite.prepare("SELECT mileage FROM Vehicle WHERE id='vehicle'").get()).toMatchObject({mileage: 999});
   });
 
-  it('lists and exports persisted rows with filtering, totals, CSV escaping and role permissions', async () => {
+  it('lists persisted rows with filtering and totals, and does not expose CSV', async () => {
     const order = await create();
     const result = await call<{items: OrderDetail[]; total: number}>('GET', '/orders?q=VINTEST&pageSize=1');
     expect(result.total).toBe(1);
     expect(result.items[0]).toMatchObject({id: order.id, totals: {totalCents: 0}});
-    db.sqlite.exec("UPDATE Customer SET name='=HYPERLINK(1)' WHERE id='customer'");
-    const csv = await handleOrders(context('GET', '/orders/export'));
-    expect(csv?.headers.get('content-type')).toContain('text/csv');
-    expect(await csv?.text()).toContain("'" + '=HYPERLINK(1)');
-    await expect(handleOrders(context('GET', '/orders/export', undefined, master))).rejects.toMatchObject({status: 403});
+    expect(await handleOrders(context('GET','/orders/export'))).toBeNull();
     await expect(call('GET', '/orders?status=INVALID')).rejects.toMatchObject({status: 422});
     expect(await handleOrders(context('POST', `/orders/${order.id}/documents`, {}))).toBeNull();
   });

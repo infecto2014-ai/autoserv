@@ -11,6 +11,16 @@ function actor(row: IdentityRow): Actor {
 }
 /** Data initialization only: schema is owned exclusively by migrations. */
 export async function ensureDefaults(db: D1Database): Promise<void> {
+  if (!await first(db, "SELECT key FROM AppMeta WHERE key='top-service-settings-v1'")) {
+    await batch(db, [
+      stmt(db,"INSERT OR IGNORE INTO ServiceSettings(id) VALUES('main')"),
+      stmt(db,`UPDATE ServiceSettings SET name='TOP-СЕРВИС',
+          address=CASE WHEN address='' THEN 'Калининград, ул. Стрелецкая, д. 8, корп. 2' ELSE address END,
+          phone=CASE WHEN phone='' THEN '+79114709360' ELSE phone END
+        WHERE id='main' AND name IN ('Автосервис','TOP-СЕРВИС') AND NOT EXISTS (SELECT 1 FROM AppMeta WHERE key='top-service-settings-v1')`),
+      stmt(db,"INSERT OR IGNORE INTO AppMeta(key,value) VALUES('top-service-settings-v1',?)",[now()]),
+    ]);
+  }
   if (await first(db, "SELECT key FROM AppMeta WHERE key = 'initialized-v1'")) return;
   const statements = [stmt(db, "INSERT OR IGNORE INTO ServiceSettings (id) VALUES ('main')")];
   let position = 0;
@@ -34,6 +44,7 @@ export async function ensureDefaults(db: D1Database): Promise<void> {
 export async function actorFromRequest(request: Request, env: Env): Promise<Actor> {
   const providerId = request.headers.get('oai-authenticated-user-id')?.trim();
   const email = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase();
+  if (email?.startsWith('directory:')) fail(403, 'Нет доступа к сервису');
   if (!providerId || !email || providerId.length > 512 || email.length > 320) fail(401, 'Войдите через ChatGPT');
   const db = env.DB;
   const existing = await first<IdentityRow>(db, `SELECT ${columns} FROM User WHERE providerId = ?`, [providerId]);
