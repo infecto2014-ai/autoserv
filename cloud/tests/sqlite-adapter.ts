@@ -1,5 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
+import journal from '../drizzle/meta/_journal.json';
 import type { D1Database, D1PreparedStatement, D1Result } from '../worker/types';
 
 function sqlValue(value: unknown): SQLInputValue {
@@ -34,7 +35,29 @@ export class SQLiteD1 implements D1Database {
     this.sqlite = new DatabaseSync(filename);
     this.sqlite.exec('PRAGMA foreign_keys = ON');
     this.sqlite.exec('PRAGMA busy_timeout = 5000');
-    if (migrate) this.sqlite.exec(readFileSync(new URL('../drizzle/0000_initial.sql', import.meta.url), 'utf8'));
+    if (migrate) this.migrate();
+  }
+  migrate(throughTag?: string): void {
+    if (throughTag && !journal.entries.some(entry => entry.tag === throughTag))
+      throw new Error('Неизвестная миграция: ' + throughTag);
+    this.sqlite.exec('CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)');
+    const applied = this.sqlite.prepare('SELECT 1 FROM d1_migrations WHERE name=?');
+    const record = this.sqlite.prepare('INSERT INTO d1_migrations(name) VALUES (?)');
+    for (const entry of journal.entries) {
+      const name = entry.tag + '.sql';
+      this.sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        if (!applied.get(name)) {
+          this.sqlite.exec(readFileSync(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+          record.run(name);
+        }
+        this.sqlite.exec('COMMIT');
+      } catch (error) {
+        this.sqlite.exec('ROLLBACK');
+        throw error;
+      }
+      if (entry.tag === throughTag) break;
+    }
   }
   prepare(sql: string): D1PreparedStatement { return new SQLiteStatement(this.sqlite, sql); }
   async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {

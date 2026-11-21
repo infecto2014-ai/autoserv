@@ -14,6 +14,9 @@ export type Condition =
   | "RECOMMENDED"
   | "DONE";
 export type PartVariant = "NONE" | "ORIGINAL" | "ANALOG" | "CUSTOM";
+export type Approval = "PENDING" | "APPROVED" | "DEFERRED";
+export type PartSource = "SERVICE" | "CUSTOMER";
+export type FinancialMode = "LEGACY" | "WORKFLOW";
 export type DocumentKind = "INSPECTION" | "WORK_ORDER";
 export interface Actor {
   id: string;
@@ -82,6 +85,9 @@ export interface OrderLine {
   variant: PartVariant;
   article: string;
   inspectionItemId?: string | null;
+  approval?: Approval;
+  completed?: boolean;
+  partSource?: PartSource;
 }
 export interface Totals {
   laborCents: number;
@@ -91,6 +97,27 @@ export interface Totals {
   totalCents: number;
   paidCents: number;
   balanceCents: number;
+}
+export interface WorkflowTotals extends Totals {
+  overpaidCents: number;
+}
+export interface LegacyFinancialSnapshot extends WorkflowTotals {
+  orderId: string;
+}
+export interface PaymentAllocation {
+  laborCents: number;
+  partsCents: number;
+  unallocatedCents: number;
+}
+export interface Payment extends PaymentAllocation {
+  id: string;
+  orderId: string;
+  kind: "OPENING" | "PAYMENT" | "REFUND";
+  amountCents: number;
+  occurredAt: string | null;
+  actorId: string | null;
+  relatedPaymentId: string | null;
+  reason: string | null;
 }
 export interface DocumentMeta {
   id: string;
@@ -122,7 +149,10 @@ export interface OrderDetail {
   inspectionItems: InspectionItem[];
   lines: OrderLine[];
   documents: DocumentMeta[];
-  totals: Totals;
+  financialMode?: FinancialMode;
+  legacySnapshot?: LegacyFinancialSnapshot | null;
+  payments?: Payment[];
+  totals: Totals & { overpaidCents?: number };
 }
 export interface Settings {
   id: string;
