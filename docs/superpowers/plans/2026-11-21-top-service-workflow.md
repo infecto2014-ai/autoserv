@@ -39,7 +39,7 @@
 - `cloud/client/src/components/{crm,order,records}.tsx`, новые компактные компоненты по необходимости: приёмка, редактор, сводка и история. Существующий осмотр остаётся доступен.
 - `cloud/tests/*`: настоящая SQLite и реальный PDF, без эмуляции пользовательских функций.
 
-## Задача 1: схема, совместимость и расчёты
+### Task 1: схема, совместимость и расчёты
 
 **Файлы:** shared/types.ts, новый shared/workflow-money.ts, drizzle/0001_top_service.sql, drizzle/meta/_journal.json, tests/sqlite-adapter.ts, новые tests/workflow-money.test.ts и tests/migration.test.ts.
 
@@ -57,7 +57,7 @@
 - [ ] Запустить `npm test -- tests/workflow-money.test.ts tests/migration.test.ts`, затем существующие тесты и typecheck. Исправить только регрессии своей задачи, не менять API преждевременно.
 - [ ] Самопроверка и коммит `feat: add consent-aware financial model and safe migration`.
 
-## Задача 2: рабочие API приёмки, заказов, оплат и статистики
+### Task 2: рабочие API приёмки, заказов, оплат и статистики
 
 **Файлы:** worker/{intake,payments,overview}.ts, worker/orders.ts, api.ts, crud.ts, auth.ts; целевые tests/intake.test.ts, payments.test.ts, overview.test.ts, orders.test.ts, crud.test.ts и workflow.test.ts при необходимости.
 
@@ -78,7 +78,7 @@
 - [ ] Запустить целевые тесты, затем всю cloud suite и typecheck. При расхождении с первыми документными тестами сохранить старые снимки; новые требования покрыть новым сценарием.
 - [ ] Самопроверка, точный отчёт контрактов и коммит `feat: implement intake consent payments and overview APIs`.
 
-## Задача 3: атомарная выдача и итоговый акт
+### Task 3: атомарная выдача и итоговый акт
 
 **Файлы:** worker/documents.ts, document-types.ts, pdf.ts; tests/pdf.test.ts, tests/workflow.test.ts, новый tests/delivery.test.ts.
 
@@ -94,7 +94,7 @@
 - [ ] Тестировать включение/выключение рекомендаций, деталь клиента, длинные строки/страницы, повтор выдачи, ошибку PDF без выдачи, правку выданного заказа и неизменность старой версии/даты выдачи.
 - [ ] Запустить целевые тесты, cloud suite, typecheck и build; самопроверка и коммит `feat: issue versioned completion acts on vehicle delivery`.
 
-## Задача 4: интерфейс приёмщика и сквозная проверка
+### Task 4: интерфейс приёмщика и сквозная проверка
 
 **Файлы:** client/src/components/{crm,order,records,ui}.tsx; компактные новые компоненты и CSS при необходимости; tests/workflow.test.ts, новый tests/browser-workflow.spec.ts и локальный SQLite dev harness при необходимости; cloud/README.md, docs/PROGRESS.md.
 
