@@ -1,4 +1,6 @@
 node_modules/
+cloud/node_modules
+.superpowers/
 .next/
 .env
 .env.*
