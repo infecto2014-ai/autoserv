@@ -1,3 +1,5 @@
+import {completionContent, completionContentHash, completionTemplate, unresolvedLine} from './completion-act';
+import type {Settings} from '../shared/types';
 import { z } from 'zod';
 import type { Customer, InspectionItem, OrderDetail, OrderLine, Payment, LegacyFinancialSnapshot, Vehicle } from '../shared/types';
 import { calculateTotals, MAX_MONEY, MAX_QUANTITY } from '../shared/money';
@@ -33,9 +35,13 @@ export async function loadOrder(ctx: Context, id: string): Promise<OrderDetail> 
     stmt(db,'SELECT id,name FROM User WHERE id='+linked('masterId'),args),
     stmt(db,'SELECT * FROM InspectionItem WHERE orderId='+linked('id')+' ORDER BY category,id',args),
     stmt(db,'SELECT * FROM OrderLine WHERE orderId='+linked('id')+' ORDER BY id',args),
-    stmt(db,'SELECT id,number,kind,version,createdAt,sha256 FROM Document WHERE orderId='+linked('id')+' ORDER BY createdAt DESC,id',args),
+    stmt(db,'SELECT id,number,kind,version,templateVersion,createdAt,sha256 FROM Document WHERE orderId='+linked('id')+' ORDER BY createdAt DESC,id',args),
     stmt(db,'SELECT * FROM Payment WHERE orderId='+linked('id')+' ORDER BY occurredAt,id',args),
     stmt(db,'SELECT * FROM LegacyFinancialSnapshot WHERE orderId='+linked('id'),args),
+    stmt(db, `SELECT json_extract(snapshot,'$.contentHash') AS hash,
+      json_extract(snapshot,'$.includeRecommendations') AS recommendations FROM Document
+      WHERE orderId=`+linked('id')+" AND templateVersion=? AND kind='WORK_ORDER' ORDER BY version DESC LIMIT 1", [...args,completionTemplate]),
+    stmt(db, "SELECT * FROM ServiceSettings WHERE id='main'"),
   ]);
   const result = <T>(index: number) => rows[index].results as T[];
   const order = result<OrderRow>(0)[0];
@@ -48,7 +54,13 @@ export async function loadOrder(ctx: Context, id: string): Promise<OrderDetail> 
   const lines = rawLines.map(l => ({...l,completed:!!l.completed}));
   if (!customer || !vehicle) fail(500, 'Нарушена связь заказа с клиентом или автомобилем');
   order.paidCents = paidFromLedger(payments);
-  return { ...order, customer, vehicle, master, inspectionItems: inspectionItems.map(x => ({...x, left: !!x.left, right: !!x.right})), lines, documents, payments, legacySnapshot, totals: totalsForOrder({...order, lines, legacySnapshot}) };
+  const detail: OrderDetail = { ...order, customer, vehicle, master, inspectionItems: inspectionItems.map(x => ({...x, left: !!x.left, right: !!x.right})), lines, documents, payments, legacySnapshot, totals: totalsForOrder({...order, lines, legacySnapshot}) };
+  const latest = result<{hash:string; recommendations:number}>(9)[0];
+  const settings = result<Settings>(10)[0];
+  detail.completionActNeedsUpdate = !scoped && detail.status === 'DELIVERED' &&
+    (!latest || !settings || !!unresolvedLine(detail) || latest.hash !==
+      await completionContentHash(completionContent(detail, settings, !!latest.recommendations), detail.discountCents));
+  return detail;
 }
 export function serializeOrder(order: OrderDetail, ctx: Context): OrderDetail {
   if (ctx.actor.role !== 'MASTER') return order;

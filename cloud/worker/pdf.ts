@@ -2,6 +2,7 @@ import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, type PDFFont, type PDFPage, rgb } from "pdf-lib";
 import { formatMoney, formatQuantity, lineTotal } from "../shared/money";
 import type { Condition, OrderStatus, PartVariant } from "../shared/types";
+import { completionTemplate } from "./completion-act";
 import type { DocumentSnapshot } from "./document-types";
 
 const states: Record<Condition, string> = {
@@ -69,7 +70,8 @@ export async function renderDocument(
   const prefix = Array.from(crypto.getRandomValues(new Uint8Array(6)), (value) => String.fromCharCode(65 + value % 26)).join("");
   const regular = await pdf.embedFont(fonts.regular, { subset: true, customName: `${prefix}+DejaVuSans` });
   const bold = await pdf.embedFont(fonts.bold, { subset: true, customName: `${prefix}+DejaVuSans-Bold` });
-  const title = data.kind === "INSPECTION" ? "Акт осмотра" : "Заказ-наряд";
+  const completion = data.templateVersion === completionTemplate;
+  const title = completion ? "Акт выполненных работ" : data.kind === "INSPECTION" ? "Акт осмотра" : "Заказ-наряд";
   pdf.setTitle(`${title} ${data.number}`);
   pdf.setAuthor(data.settings.name);
   pdf.setLanguage("ru-RU");
@@ -162,15 +164,17 @@ export async function renderDocument(
   newPage();
   paragraph(data.settings.name, { size: 12, bold: true });
   paragraph(shown(data.settings.address));
-  paragraph(`Тел.: ${shown(data.settings.phone)} · ИНН: ${shown(data.settings.taxId)}`);
+  const taxId = data.settings.taxId || !completion ? ` · ИНН: ${shown(data.settings.taxId)}` : "";
+  paragraph(`Тел.: ${shown(data.settings.phone)}${taxId}`);
   top += 5;
-  paragraph(data.kind === "INSPECTION" ? "АКТ ОСМОТРА ТРАНСПОРТНОГО СРЕДСТВА" : "ЗАКАЗ-НАРЯД", { size: 12, bold: true });
-  paragraph(`№ ${data.number} от ${date(data.createdAt, data.settings.timezone)}`);
-  paragraph(`Клиент: ${data.customer.name} · Телефон: ${shown(data.customer.phone)}`);
+  paragraph(data.kind === "INSPECTION" ? "АКТ ОСМОТРА ТРАНСПОРТНОГО СРЕДСТВА" : title.toUpperCase(), { size: 12, bold: true });
+  paragraph(`№ ${data.number} от ${date(data.createdAt, data.settings.timezone)}${completion ? ` · Версия ${data.version}` : ""}`);
+  paragraph(`Клиент: ${shown(data.customer.name)} · Телефон: ${shown(data.customer.phone)}`);
   paragraph(`Автомобиль: ${data.vehicle.make} ${data.vehicle.model} · Год: ${shown(data.vehicle.year)}`);
-  paragraph(`Госномер: ${shown(data.vehicle.plate)} · VIN: ${shown(data.vehicle.vin)} · Пробег: ${data.order.mileage.toLocaleString("ru-RU")} км`);
+  const mileage = data.order.mileage || !completion ? `${data.order.mileage.toLocaleString("ru-RU")} км` : "—";
+  paragraph(`Госномер: ${shown(data.vehicle.plate)} · VIN: ${shown(data.vehicle.vin)} · Пробег: ${mileage}`);
   paragraph(`Заказ: ${data.order.number} · Открыт: ${date(data.order.openedAt, data.settings.timezone)} · Статус: ${statuses[data.order.status]}`);
-  paragraph(`Мастер: ${shown(data.masterName)}`);
+  if (!completion || data.masterName) paragraph(`Мастер: ${shown(data.masterName)}`);
   paragraph(`Жалоба клиента: ${shown(data.order.complaint)}`, { gap: 9 });
 
   if (data.kind === "INSPECTION") {
@@ -193,7 +197,18 @@ export async function renderDocument(
     for (const kind of ["LABOR", "PART"] as const) {
       section(kind === "LABOR" ? "Работы и услуги" : "Запчасти и материалы");
       const lines = data.lines.filter((line) => line.kind === kind);
-      lines.forEach((line, index) => row([String(index + 1), `${line.name}${kind === "PART" ? `\n${variants[line.variant]} · Артикул: ${shown(line.article)}` : ""}`, formatQuantity(line.quantityMilli), formatMoney(line.unitPriceCents), formatMoney(lineTotal(line.quantityMilli, line.unitPriceCents))]));
+      lines.forEach((line, index) => {
+        const customerPart = completion && kind === "PART" && line.partSource === "CUSTOMER";
+        const partInfo = [
+          customerPart ? "Деталь клиента · Без оплаты сервису" : "",
+          !completion || line.variant !== "NONE" ? variants[line.variant] : "",
+          line.article || !completion ? `Артикул: ${shown(line.article)}` : "",
+        ].filter(Boolean).join(" · ");
+        const details = kind === "PART" && partInfo ? `\n${partInfo}` : "";
+        row([String(index + 1), line.name + details, formatQuantity(line.quantityMilli),
+          customerPart ? "—" : formatMoney(line.unitPriceCents),
+          customerPart ? "—" : formatMoney(lineTotal(line.quantityMilli, line.unitPriceCents))]);
+      });
       if (!lines.length) row(["", "Позиции не добавлены.", "", "", ""]);
     }
   }
@@ -203,10 +218,12 @@ export async function renderDocument(
     paragraph("L — левая сторона, R — правая сторона. «—» — сторона не отмечена.", { size: 7 });
     paragraph("Оригинал и аналог — альтернативные цены за единицу. Итоги рассчитаны по выбранным строкам заказа.", { size: 7 });
   }
-  ensure(30);
-  paragraph("Рекомендации", { bold: true });
-  paragraph(shown(data.order.recommendations));
-  top += 5;
+  if (!completion || data.includeRecommendations) {
+    ensure(30);
+    paragraph("Рекомендации", { bold: true });
+    paragraph(shown(data.order.recommendations));
+    top += 5;
+  }
   ensure(30);
   paragraph("Замечания", { bold: true });
   paragraph(shown(data.order.comment));
@@ -214,9 +231,9 @@ export async function renderDocument(
   ensure(113);
   for (const [label, cents] of [
     ["Работы", data.totals.laborCents], ["Запчасти", data.totals.partsCents],
-    ["До скидки", data.totals.subtotalCents], ["Скидка", data.totals.discountCents],
+    ["До скидки", data.totals.subtotalCents], [completion ? "Скидка на работы" : "Скидка", data.totals.discountCents],
     ["Итого", data.totals.totalCents], ["Оплачено", data.totals.paidCents],
-    ["Остаток", data.totals.balanceCents],
+    [completion ? "Остаток долга" : "Остаток", data.totals.balanceCents],
   ] as const) {
     const font = label === "Итого" ? bold : regular;
     draw(label, WIDTH - LEFT - 260, top, 8, font);
@@ -227,17 +244,18 @@ export async function renderDocument(
   }
   top += 14;
   ensure(42);
-  paragraph(`Мастер: _______________________ / ${shown(data.masterName)}`, { gap: 11 });
-  paragraph(`Клиент: _______________________ / ${data.customer.name}`);
+  paragraph(completion ? `Сотрудник: _______________________ / ${shown(data.signerName)}`
+    : `Мастер: _______________________ / ${shown(data.masterName)}`, { gap: 11 });
+  paragraph(`Клиент: _______________________${data.customer.name ? ` / ${data.customer.name}` : ""}`);
 
   const footerLabel = `Шаблон ${data.templateVersion} · ${data.settings.timezone}`;
   const longFooter = regular.widthOfTextAtSize(footerLabel, 7) > 330;
-  if (longFooter) paragraph(footerLabel, { size: 7 });
+  if (!completion && longFooter) paragraph(footerLabel, { size: 7 });
   const pages = pdf.getPages();
   pages.forEach((current, index) => {
     page = current;
     // Footer is outside the body region on every page, added after pagination.
-    draw(longFooter ? "Шаблон документа указан в тексте" : footerLabel, LEFT, 809, 7);
+    if (!completion) draw(longFooter ? "Шаблон документа указан в тексте" : footerLabel, LEFT, 809, 7);
     const count = `Страница ${index + 1} из ${pages.length}`;
     draw(count, WIDTH - LEFT - regular.widthOfTextAtSize(count, 7), 809, 7);
   });

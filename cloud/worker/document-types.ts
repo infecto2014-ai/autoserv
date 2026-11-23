@@ -29,10 +29,14 @@ export interface DocumentSnapshot {
   customer: Pick<Customer, "name" | "phone">;
   vehicle: Pick<Vehicle, "make" | "model" | "year" | "vin" | "plate">;
   masterName: string;
+  signerName?: string;
+  includeRecommendations?: boolean;
+  version?: number;
+  contentHash?: string;
   inspectionItems: Omit<InspectionItem, "catalogItemId">[];
   lines: Pick<
     OrderLine,
-    "kind" | "name" | "quantityMilli" | "unitPriceCents" | "variant" | "article"
+    "kind" | "name" | "quantityMilli" | "unitPriceCents" | "variant" | "article" | "partSource" | "approval" | "completed"
   >[];
   totals: Totals;
 }

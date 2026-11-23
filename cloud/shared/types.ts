@@ -120,6 +120,7 @@ export interface Payment extends PaymentAllocation {
   reason: string | null;
 }
 export interface DocumentMeta {
+  templateVersion: string;
   id: string;
   number: string;
   kind: DocumentKind;
@@ -149,6 +150,7 @@ export interface OrderDetail {
   inspectionItems: InspectionItem[];
   lines: OrderLine[];
   documents: DocumentMeta[];
+  completionActNeedsUpdate?: boolean;
   financialMode?: FinancialMode;
   legacySnapshot?: LegacyFinancialSnapshot | null;
   payments?: Payment[];

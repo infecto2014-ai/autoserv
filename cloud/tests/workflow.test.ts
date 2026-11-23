@@ -20,7 +20,7 @@ describe('cloud complete API workflow',()=>{
    const item=order.inspectionItems[0];
    order=await api<OrderDetail>(`/api/orders/${order.id}/inspection`,'PUT',{version:order.version,recommendations:'Повторить проверку через месяц',items:order.inspectionItems.map(x=>x.id===item.id?{...x,left:true,right:true,condition:'REPAIR',quantityMilli:1500,laborPriceCents:12001,originalPriceCents:30003,analogPriceCents:20002,selectedPart:'ANALOG'}:x)});
    order=await api<OrderDetail>(`/api/orders/${order.id}/transfer`,'POST',{version:order.version,inspectionItemIds:[item.id]});expect(order.totals.totalCents).toBe(0);
-   order=await api<OrderDetail>(`/api/orders/${order.id}/lines`,'PUT',{version:order.version,lines:order.lines.map(l=>({...l,approval:'APPROVED'}))});expect(order.totals.totalCents).toBe(48005);
+   order=await api<OrderDetail>(`/api/orders/${order.id}/lines`,'PUT',{version:order.version,lines:order.lines.map(l=>({...l,approval:'APPROVED',completed:true}))});expect(order.totals.totalCents).toBe(48005);
    const docs:{id:string;sha256:string;number:string}[]=[];
    for(const kind of ['INSPECTION','WORK_ORDER']){
     docs.push(await api(`/api/orders/${order.id}/documents`,'POST',{version:order.version,kind},201));

@@ -393,8 +393,12 @@ describe("server PDF documents with real Cyrillic fonts", () => {
     expect(headerPages).toBeGreaterThan(4);
   }, 60000);
 
-  it("continues a long work order and wraps unspaced article codes without losing the last row", async () => {
+  it("continues a long completion act and wraps unspaced article codes without losing the last row", async () => {
     const data = fixture("WORK_ORDER");
+    data.templateVersion = "completion-act-1.0";
+    data.signerName = "Иван Сотрудник";
+    data.includeRecommendations = true;
+    data.version = 1;
     data.lines = Array.from({ length: 85 }, (_, index) => ({
       ...data.lines[index % 3],
       kind: index < 40 ? "LABOR" : "PART",
