@@ -42,3 +42,73 @@ it('creates a directory-only master by name and searches client and vehicle visi
   }
   expect((await request('vehicles/'+v.id+'?to=2026-10-31')).orders).toEqual([]);
 });
+
+it('keeps a login-capable administrator when directory records exist, including at the atomic guard',async()=>{
+  const directory=await request('staff','POST',{name:'Мастер'});
+  for(const role of ['ADMIN','RECEPTION'])
+    await expect(request('staff/'+directory.id,'PATCH',{role})).rejects.toMatchObject({status:422});
+  // A previously promoted directory entry may already be in the database.
+  await run(db,"UPDATE User SET role='ADMIN' WHERE id=?",[directory.id]);
+  await expect(request('staff/admin','PATCH',{active:false})).rejects.toMatchObject({status:409});
+  const second=await request('staff','POST',{name:'Приглашённый администратор',email:'second@example.test',role:'ADMIN'});
+  const batch=db.batch.bind(db);
+  db.batch=async statements=>{
+    db.sqlite.prepare("UPDATE User SET active=0 WHERE id=?").run(second.id);
+    return batch(statements);
+  };
+  await expect(request('staff/admin','PATCH',{role:'RECEPTION'})).rejects.toMatchObject({status:409});
+  expect(await first(db,"SELECT role,active FROM User WHERE id='admin'")).toMatchObject({role:'ADMIN',active:1});
+});
+
+it('reads history rows and their discounts as one snapshot across a committed edit',async()=>{
+  const {afterRead}=await import('./after-read');
+  const c=await customer(), v=await vehicle(c.id); await order(c.id,v.id);
+  const changed=afterRead(db,/ledgerPaidCents/,()=>{
+    db.sqlite.exec("BEGIN; UPDATE WorkOrder SET discountCents=0; DELETE FROM OrderLine; COMMIT");
+  });
+  const detail=await request('customers/'+c.id);
+  expect(changed()).toBe(true);
+  expect(detail.orders[0].totals.totalCents).toBe(900);
+  expect(detail.orders[0].lines).toHaveLength(1);
+  const fresh=await request('customers/'+c.id);
+  expect(fresh.orders[0].totals.totalCents).toBe(0);
+  expect(fresh.orders[0].lines).toHaveLength(0);
+});
+
+it('matches a visit number only within the selected local dates',async()=>{
+  const c=await customer('Фёдор Семёнов'),v=await request('vehicles','POST',{customerId:c.id,make:'ЛаДа',model:'Веста',mileage:0});
+  await order(c.id,v.id,'Визит-осень'); await order(c.id,v.id,'Визит-зима');
+  db.sqlite.exec("UPDATE WorkOrder SET openedAt=CASE id WHEN 'Визит-осень' THEN '2026-10-20T12:00:00.000Z' ELSE '2026-11-15T12:00:00.000Z' END");
+  for(const resource of ['customers','vehicles']){
+    expect((await request(resource+'?q=Визит-осень&from=2026-11-01')).total).toBe(0);
+    expect((await request(resource+'?q=визит-ОСЕНЬ&to=2026-10-31')).total).toBe(1);
+  }
+});
+
+it('paginates case-insensitive Cyrillic matches for both customers and vehicles',async()=>{
+  for(const name of ['Фёдор Семёнов','ФЁДОР Семёнов','Иванов']){
+    const owner=await customer(name);
+    const match=name!=='Иванов';
+    await request('vehicles','POST',{customerId:owner.id,make:match?'ЛаДа':'ГАЗ',model:match?'Веста':'Волга',mileage:0});
+  }
+  for(const resource of ['customers','vehicles']){
+    for(const q of ['фЁДОР','семёнов','лада','веста']){
+      const path=resource+'?q='+encodeURIComponent(q)+'&pageSize=1&page=';
+      const first=await request(path+'1'),second=await request(path+'2');
+      expect(first.total).toBe(2);
+      expect(second.total).toBe(2);
+      expect(first.items).toHaveLength(1);
+      expect(second.items).toHaveLength(1);
+      expect(first.items[0].id).not.toBe(second.items[0].id);
+    }
+  }
+});
+
+it('preserves literal GLOB punctuation and Unicode simple case variants in the search',async()=>{
+  const match=await customer('Й[Σ]*?');
+  await customer('ЙΣ');
+  for(const q of ['й[ς]','*','?','[']){
+    const result=await request('customers?q='+encodeURIComponent(q));
+    expect(result.items.map((row:{id:string})=>row.id)).toEqual([match.id]);
+  }
+});

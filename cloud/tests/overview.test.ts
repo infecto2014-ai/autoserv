@@ -22,3 +22,22 @@ it('keeps active groups and debt current and filters completions by the first de
     await expect(overview({...context(''),actor:{...actor,role:'MASTER'}})).rejects.toMatchObject({status:403});
   } finally {db.close();}
 });
+
+it('reports debt and receipts from the same instant across a committed payment',async()=>{
+  const {afterRead}=await import('./after-read');
+  const db=new SQLiteD1();
+  try{
+    db.sqlite.exec(`INSERT INTO User(id,name,email) VALUES('a','Приёмщик','a@example.test');
+      INSERT INTO Customer(id,name,phone,phoneNormalized) VALUES('c','','12345','12345');
+      INSERT INTO Vehicle(id,customerId,make,model) VALUES('v','c','Марка','');
+      INSERT INTO WorkOrder(id,number,customerId,vehicleId,mileage,complaint) VALUES('o','1','c','v',0,'Осмотр');
+      INSERT INTO OrderLine(id,orderId,kind,name,unitPriceCents,approval) VALUES('l','o','LABOR','Работа',100,'APPROVED')`);
+    const changed=afterRead(db,/debtCents/,()=>db.sqlite.exec(`INSERT INTO Payment(id,orderId,kind,amountCents,laborCents,partsCents,unallocatedCents,occurredAt,actorId)
+      VALUES('p','o','PAYMENT',100,100,0,0,'2026-11-01T00:00:00.000Z','a')`));
+    const actor:Actor={id:'a',role:'RECEPTION',name:'А',email:'a@example.test'};
+    const ctx={actor,env:{DB:db},params:{},request:new Request('https://crm.test/api/overview')};
+    expect(await (await overview(ctx)).json()).toMatchObject({money:{debtCents:100,totalCents:0}});
+    expect(changed()).toBe(true);
+    expect(await (await overview(ctx)).json()).toMatchObject({money:{debtCents:0,totalCents:100}});
+  }finally{db.close();}
+});

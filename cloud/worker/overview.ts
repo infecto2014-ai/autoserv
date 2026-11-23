@@ -1,5 +1,5 @@
 import {fail, json, requireRole} from './common';
-import {first} from './db';
+import {stmt} from './db';
 import type {Context} from './types';
 
 // All order lists and dashboard debts use identical eligible rows and rounding.
@@ -37,16 +37,19 @@ export function dateFilter(request: Request, column: string) {
 export async function overview(ctx: Context) {
   requireRole(ctx.actor,'ADMIN','RECEPTION');
   const closed = dateFilter(ctx.request,'w.closedAt'), paid = dateFilter(ctx.request,'occurredAt');
-  const counts = await first<Record<string,number>>(ctx.env.DB, financeCTE + `
+  const db = ctx.env.DB;
+  const countsQuery = stmt(db, financeCTE + `
     SELECT COUNT(CASE WHEN w.status IN ('NEW','DIAGNOSTICS','IN_PROGRESS') THEN 1 END) active,
       COUNT(CASE WHEN w.status='APPROVAL' THEN 1 END) approval, COUNT(CASE WHEN w.status='READY' THEN 1 END) ready,
       COUNT(CASE WHEN w.status='DELIVERED' AND ${closed.sql} THEN 1 END) completed,
       coalesce(SUM(CASE WHEN w.status<>'CANCELLED' THEN max(0,f.totalCents-f.paidCents) ELSE 0 END),0) debtCents
     FROM WorkOrder w JOIN finances f ON f.id=w.id`, closed.args);
   const fields = ['laborCents','partsCents','unallocatedCents','amountCents'];
-  const money = await first<Record<string,number>>(ctx.env.DB, 'SELECT ' + fields.map(field =>
+  const moneyQuery = stmt(db, 'SELECT ' + fields.map(field =>
     `coalesce(SUM(CASE WHEN kind='REFUND' THEN -${field} ELSE ${field} END),0) AS ${field === 'amountCents' ? 'totalCents' : field}`).join(',') +
     ' FROM Payment WHERE ' + paid.sql, paid.args);
+  const [countRows, moneyRows] = await db.batch<Record<string,number>>([countsQuery, moneyQuery]);
+  const counts = countRows.results[0], money = moneyRows.results[0];
   if (!counts || !money || !Object.values({...counts,...money}).every(Number.isSafeInteger)) fail(422,'Сумма за период превышает допустимую точность');
   const {debtCents,...groups} = counts;
   return json({counts:groups,money:{...money,debtCents}});

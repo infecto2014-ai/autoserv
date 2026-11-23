@@ -3,6 +3,7 @@ import { calculateTotals } from '../shared/money';
 import type { LegacyFinancialSnapshot, OrderDetail } from '../shared/types';
 import { dateFilter, financeCTE } from './overview';
 import { totalsForOrder } from './finances';
+import { searchPattern } from './search';
 import type { Context, D1Database, D1PreparedStatement, Actor } from './types';
 import { body, fail, json, requireRole, pagination } from './common';
 import { all, first, stmt, batch, guarded, uuid, now } from './db';
@@ -55,15 +56,15 @@ async function history(db: D1Database, actor: Actor, field: 'customerId'|'vehicl
   const dates = dateFilter(request, 'o.openedAt');
   const orderWhere = `o.${field} = ? AND ${dates.sql}${actor.role === 'MASTER' ? ' AND o.masterId = ?' : ''}`;
   const orderArgs = [key,...dates.args,...(actor.role === 'MASTER' ? [actor.id] : [])];
-  const orders = await all<Row>(db, financeCTE + ` SELECT o.*,f.paidCents ledgerPaidCents FROM WorkOrder o JOIN finances f ON f.id=o.id WHERE ${orderWhere} ORDER BY o.openedAt DESC,o.id`, orderArgs);
-  if (!orders.length) return [];
-  const [snapshots,lines,customers,vehicles,masters] = await Promise.all([
-    all<LegacyFinancialSnapshot>(db,`SELECT s.* FROM LegacyFinancialSnapshot s JOIN WorkOrder o ON o.id=s.orderId WHERE ${orderWhere}`,orderArgs),
-    all<Row>(db,`SELECT l.* FROM OrderLine l JOIN WorkOrder o ON o.id=l.orderId WHERE ${orderWhere}`,orderArgs),
-    all<Row>(db,`SELECT DISTINCT c.* FROM Customer c JOIN WorkOrder o ON o.customerId=c.id WHERE ${orderWhere}`,orderArgs),
-    all<Row>(db,`SELECT DISTINCT v.* FROM Vehicle v JOIN WorkOrder o ON o.vehicleId=v.id WHERE ${orderWhere}`,orderArgs),
-    all<Row>(db,`SELECT DISTINCT u.id,u.name FROM User u JOIN WorkOrder o ON o.masterId=u.id WHERE ${orderWhere}`,orderArgs),
-  ]);
+  const [orders,snapshotRows,lines,customers,vehicles,masters] = (await db.batch<Row>([
+    stmt(db,financeCTE + ` SELECT o.*,f.paidCents ledgerPaidCents FROM WorkOrder o JOIN finances f ON f.id=o.id WHERE ${orderWhere} ORDER BY o.openedAt DESC,o.id`,orderArgs),
+    stmt(db,`SELECT s.* FROM LegacyFinancialSnapshot s JOIN WorkOrder o ON o.id=s.orderId WHERE ${orderWhere}`,orderArgs),
+    stmt(db,`SELECT l.* FROM OrderLine l JOIN WorkOrder o ON o.id=l.orderId WHERE ${orderWhere}`,orderArgs),
+    stmt(db,`SELECT DISTINCT c.* FROM Customer c JOIN WorkOrder o ON o.customerId=c.id WHERE ${orderWhere}`,orderArgs),
+    stmt(db,`SELECT DISTINCT v.* FROM Vehicle v JOIN WorkOrder o ON o.vehicleId=v.id WHERE ${orderWhere}`,orderArgs),
+    stmt(db,`SELECT DISTINCT u.id,u.name FROM User u JOIN WorkOrder o ON o.masterId=u.id WHERE ${orderWhere}`,orderArgs),
+  ])).map(query => query.results);
+  const snapshots = snapshotRows as LegacyFinancialSnapshot[];
   const customerMap=new Map(customers.map(c=>[c.id,c])),vehicleMap=new Map(vehicles.map(v=>[v.id,v])),masterMap=new Map(masters.map(m=>[m.id,{id:m.id,name:m.name}]));
   const snapshotMap = new Map(snapshots.map(s=>[s.orderId,s]));
   const linesByOrder = new Map<string,OrderDetail['lines']>();
@@ -105,21 +106,21 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
         args.push(...dates.args,...masterArgs);
       }
       if(q){
-        const like='%'+q+'%',digits=q.replace(/\D/g,'');
-        const customerMatch=(alias:string)=>`(${alias}.name LIKE ? OR ${alias}.phone LIKE ? OR ${alias}.phoneNormalized LIKE ? OR ${alias}.email LIKE ?)`;
-        const customerArgs=[like,like,'%'+(digits || q)+'%',like];
-        const carMatch=(alias:string)=>`(${alias}.make LIKE ? OR ${alias}.model LIKE ? OR ${alias}.vin LIKE ? OR ${alias}.plate LIKE ?)`;
-        const carArgs=[like,like,like,like];
+        const pattern=searchPattern(q), digits=q.replace(/\D/g,'');
+        const customerMatch=(alias:string)=>`(${alias}.name GLOB ? OR ${alias}.phone GLOB ? OR ${alias}.phoneNormalized GLOB ? OR ${alias}.email GLOB ?)`;
+        const customerArgs=[pattern,pattern,digits ? '*'+digits+'*' : pattern,pattern];
+        const carMatch=(alias:string)=>`(${alias}.make GLOB ? OR ${alias}.model GLOB ? OR ${alias}.vin GLOB ? OR ${alias}.plate GLOB ?)`;
+        const carArgs=[pattern,pattern,pattern,pattern];
         const orderMatch=`EXISTS (SELECT 1 FROM WorkOrder o JOIN Customer c ON c.id=o.customerId JOIN Vehicle v ON v.id=o.vehicleId
-          WHERE o.${relation}=t.id AND (o.number LIKE ? OR ${table==='Customer'?carMatch('v'):customerMatch('c')})${masterScope})`;
+          WHERE o.${relation}=t.id AND ${dates.sql} AND (o.number GLOB ? OR ${table==='Customer'?carMatch('v'):customerMatch('c')})${masterScope})`;
         if(table==='Customer'){
           const carScope=scope(actor,'Vehicle','v');
           where+=` AND (${customerMatch('t')} OR EXISTS (SELECT 1 FROM Vehicle v WHERE v.customerId=t.id AND ${carMatch('v')} AND ${carScope.sql}) OR ${orderMatch})`;
-          args.push(...customerArgs,...carArgs,...carScope.args,like,...carArgs,...masterArgs);
+          args.push(...customerArgs,...carArgs,...carScope.args,...dates.args,pattern,...carArgs,...masterArgs);
         }else{
           const ownerScope=scope(actor,'Customer','c');
           where+=` AND (${carMatch('t')} OR EXISTS (SELECT 1 FROM Customer c WHERE c.id=t.customerId AND ${customerMatch('c')} AND ${ownerScope.sql}) OR ${orderMatch})`;
-          args.push(...carArgs,...customerArgs,...ownerScope.args,like,...customerArgs,...masterArgs);
+          args.push(...carArgs,...customerArgs,...ownerScope.args,...dates.args,pattern,...customerArgs,...masterArgs);
         }
       }
       const rows=await all<Row>(db,`SELECT t.* FROM ${table} t WHERE ${where} ORDER BY ${table==='Customer'?'t.name':'t.createdAt DESC'},t.id LIMIT ? OFFSET ?`,[...args,pageSize,(page-1)*pageSize]);
@@ -173,9 +174,25 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
       await batch(db,[insert(db,'User',{id:entityId,...input,email,active:1,providerId:null,createdAt:now()}),audit(db,actor,'CREATE','User',entityId,{role:input.role})]);
       return json(bools(await get(db,'User',entityId,staffColumns)),201);
     }
-    if(method==='PATCH' && key) {requireRole(actor,'ADMIN');const input=staffPatch.parse(await body(request)),before=await get(db,'User',key,staffColumns);const removing=before.role==='ADMIN' && !!before.active && ((input.role!==undefined && input.role!=='ADMIN') || input.active===false);
-      if(removing && ((await first<{n:number}>(db,"SELECT COUNT(*) n FROM User WHERE role='ADMIN' AND active=1"))?.n??0)<=1) fail(409,'Нельзя отключить или изменить роль последнего активного администратора');
-      await guarded(db,`SELECT EXISTS(SELECT 1 FROM User WHERE id=? AND name=? AND role=? AND active=?)${removing?" AND (SELECT COUNT(*) FROM User WHERE role='ADMIN' AND active=1)>1":''}`,[key,before.name,before.role,before.active],[update(db,'User',key,input),audit(db,actor,'UPDATE','User',key,{fields:Object.keys(input)})]);return json(bools(await get(db,'User',key,staffColumns)));}
+    if(method==='PATCH' && key) {
+      requireRole(actor,'ADMIN');
+      const input = staffPatch.parse(await body(request));
+      const before = await get(db,'User',key,'name,email,role,active');
+      const directory = before.email.toLowerCase().startsWith('directory:');
+      if (directory && (input.role ?? before.role) !== 'MASTER' && (input.role !== undefined || input.active === true))
+        fail(422,'Для роли администратора или приёмщика добавьте сотрудника с email');
+      const removingAdmin = !directory && before.role === 'ADMIN' && before.active &&
+        (input.active === false || (input.role !== undefined && input.role !== 'ADMIN'));
+      const otherAdmin = "SELECT 1 FROM User WHERE id<>? AND role='ADMIN' AND active=1 AND email NOT LIKE 'directory:%'";
+      if (removingAdmin && !await first(db,otherAdmin,[key]))
+        fail(409,'Нельзя отключить или изменить роль последнего активного администратора');
+      const condition = 'SELECT EXISTS(SELECT 1 FROM User WHERE id=? AND name=? AND email=? AND role=? AND active=?)' +
+        (removingAdmin ? ` AND EXISTS(${otherAdmin})` : '');
+      await guarded(db,condition,[key,before.name,before.email,before.role,before.active,...(removingAdmin ? [key] : [])],[
+        update(db,'User',key,input),audit(db,actor,'UPDATE','User',key,{fields:Object.keys(input)}),
+      ]);
+      return json(bools(await get(db,'User',key,staffColumns)));
+    }
   }
   if(resource==='catalog') {
     if(method==='GET' && !key) return json({items:(await all<Row>(db,'SELECT * FROM CatalogItem ORDER BY sortOrder,category,name,id')).map(bools)});
