@@ -1,4 +1,5 @@
 import type {OrderDetail, Settings} from '../shared/types';
+import type {DocumentSnapshot} from './document-types';
 
 export const completionTemplate = 'completion-act-1.0';
 
@@ -25,8 +26,16 @@ export function completionContent(order: OrderDetail, settings: Settings, includ
 }
 
 // Payments and signer concern a particular printing. Neither requires a replacement act.
-export async function completionContentHash(content: ReturnType<typeof completionContent>, discountCents: number) {
-  const bytes = new TextEncoder().encode(JSON.stringify([content, discountCents]));
+type ActContent = Pick<DocumentSnapshot,
+  'settings' | 'customer' | 'vehicle' | 'masterName' | 'includeRecommendations' | 'order' | 'lines'>;
+
+export async function completionContentHash(content: ActContent, discountCents: number) {
+  const {settings,customer,vehicle,masterName,includeRecommendations,order,lines} = content;
+  const labor = lines.filter(line => line.kind === 'LABOR').map(({name,quantityMilli,unitPriceCents}) =>
+    [name,quantityMilli,unitPriceCents]);
+  const parts = lines.filter(line => line.kind === 'PART').map(({name,quantityMilli,partSource,unitPriceCents,variant,article}) =>
+    [name,quantityMilli,partSource === 'CUSTOMER' ? null : unitPriceCents,variant,article]);
+  const bytes = new TextEncoder().encode(JSON.stringify([settings,customer,vehicle,masterName,includeRecommendations,order,labor,parts,discountCents]));
   const hash = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2,'0')).join('');
 }

@@ -135,3 +135,56 @@ it('открывает прежний заказ-наряд до сверки и
   expect(await pdf(oldMeta)).toContain('Прежний сервис');
   expect(saved(oldMeta.id)).toBe(JSON.stringify(old));
 });
+
+it.each(['новый','предыдущий'])('сравнивает только печатаемые данные после согласования (%s формат снимка)', async format => {
+  let order = await intake();
+  const path = 'orders/' + order.id;
+  order = await api(path+'/lines','PUT',{version:order.version,lines:[
+    {...line,article:'Внутренний код',unitPriceCents:7000},
+    {...line,kind:'PART',partSource:'CUSTOMER',name:'Датчик клиента',unitPriceCents:8000},
+    {...line,kind:'PART',partSource:'SERVICE',name:'Фильтр сервиса',unitPriceCents:9000}]});
+  order = await api(path,'PATCH',{version:order.version,status:'READY'});
+  const delivery = await api<Delivery>(path+'/deliver','POST',{version:order.version,requestId:'deliver',includeRecommendations:false});
+  order = delivery.order;
+  if (format === 'предыдущий') {
+    const snapshot = JSON.parse(saved(delivery.document.id));
+    const {settings,customer,vehicle,masterName,includeRecommendations,order,lines} = snapshot;
+    const content = {settings,customer,vehicle,masterName,includeRecommendations,order,lines};
+    delete snapshot.printedContentHash;
+    snapshot.contentHash = createHash('sha256').update(JSON.stringify([content,snapshot.totals.discountCents])).digest('hex');
+    db.sqlite.prepare('UPDATE Document SET snapshot=? WHERE id=?').run(JSON.stringify(snapshot),delivery.document.id);
+  }
+  const original = saved(delivery.document.id);
+  const text = await pdf(delivery.document);
+  expect(JSON.parse(original).lines).toEqual(expect.arrayContaining([
+    expect.objectContaining({partSource:'CUSTOMER',unitPriceCents:8000}),
+    expect.objectContaining({kind:'LABOR',article:'Внутренний код'})]));
+  expect(text).not.toContain('Внутренний код');
+  expect(text).not.toContain('80,00');
+
+  async function editAndApprove(name: string, changes: Partial<OrderDetail['lines'][number]>) {
+    order = await api(path+'/lines','PUT',{version:order.version,lines:order.lines.map(row => row.name === name ? {...row,...changes} : row)});
+    expect(order.lines.find(row => row.name === (changes.name ?? name))?.approval).toBe('PENDING');
+    order = await api(path+'/lines','PUT',{version:order.version,lines:order.lines.map(row => ({...row,approval:'APPROVED'}))});
+  }
+  await editAndApprove('Датчик клиента',{unitPriceCents:12345});
+  expect(order.completionActNeedsUpdate).toBe(false);
+  await editAndApprove('Диагностика',{article:'Исправленный код'});
+  expect(order.completionActNeedsUpdate).toBe(false);
+  expect(order.totals).toEqual(delivery.order.totals);
+
+  await editAndApprove('Датчик клиента',{name:'Датчик положения'});
+  expect(order.completionActNeedsUpdate).toBe(true);
+  await editAndApprove('Датчик положения',{name:'Датчик клиента'});
+  expect(order.completionActNeedsUpdate).toBe(false);
+  await editAndApprove('Датчик клиента',{quantityMilli:2000});
+  expect(order.completionActNeedsUpdate).toBe(true);
+  await editAndApprove('Датчик клиента',{quantityMilli:1000});
+  expect(order.completionActNeedsUpdate).toBe(false);
+  await editAndApprove('Фильтр сервиса',{unitPriceCents:10000});
+  expect(order.completionActNeedsUpdate).toBe(true);
+  expect(order.totals.totalCents).toBe(17000);
+  expect(order.documents).toEqual([delivery.document]);
+  expect(saved(delivery.document.id)).toBe(original);
+  expect(await pdf(delivery.document)).toBe(text);
+});

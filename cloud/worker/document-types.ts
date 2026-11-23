@@ -32,7 +32,7 @@ export interface DocumentSnapshot {
   signerName?: string;
   includeRecommendations?: boolean;
   version?: number;
-  contentHash?: string;
+  printedContentHash?: string;
   inspectionItems: Omit<InspectionItem, "catalogItemId">[];
   lines: Pick<
     OrderLine,

@@ -39,7 +39,7 @@ async function saveDocument(ctx: Context, fonts: FontBytes, id: string, input: z
   if(input.kind === 'WORK_ORDER') {
     const content = completionContent(recordDelivery ? {...order,status:'DELIVERED'} : order, settings, input.includeRecommendations);
     snapshot = {...header, ...content, templateVersion:completionTemplate, signerName:ctx.actor.name, inspectionItems:[],
-      contentHash:await completionContentHash(content, order.discountCents), totals:totalsForOrder({...order,status:'DELIVERED'})};
+      printedContentHash:await completionContentHash(content, order.discountCents), totals:totalsForOrder({...order,status:'DELIVERED'})};
   } else {
     const {number,openedAt,mileage,complaint,recommendations,comment,status} = order;
     snapshot = {...header, ...customerAndVehicle(order), masterName:order.master?.name ?? 'Не назначен', templateVersion:'cloud-1.0',

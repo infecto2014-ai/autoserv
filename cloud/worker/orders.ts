@@ -1,5 +1,6 @@
 import {completionContent, completionContentHash, completionTemplate, unresolvedLine} from './completion-act';
 import type {Settings} from '../shared/types';
+import type {DocumentSnapshot} from './document-types';
 import { z } from 'zod';
 import type { Customer, InspectionItem, OrderDetail, OrderLine, Payment, LegacyFinancialSnapshot, Vehicle } from '../shared/types';
 import { calculateTotals, MAX_MONEY, MAX_QUANTITY } from '../shared/money';
@@ -38,7 +39,8 @@ export async function loadOrder(ctx: Context, id: string): Promise<OrderDetail> 
     stmt(db,'SELECT id,number,kind,version,templateVersion,createdAt,sha256 FROM Document WHERE orderId='+linked('id')+' ORDER BY createdAt DESC,id',args),
     stmt(db,'SELECT * FROM Payment WHERE orderId='+linked('id')+' ORDER BY occurredAt,id',args),
     stmt(db,'SELECT * FROM LegacyFinancialSnapshot WHERE orderId='+linked('id'),args),
-    stmt(db, `SELECT json_extract(snapshot,'$.contentHash') AS hash,
+    stmt(db, `SELECT json_extract(snapshot,'$.printedContentHash') AS hash,
+      CASE WHEN json_type(snapshot,'$.printedContentHash') IS NULL THEN snapshot END AS previousSnapshot,
       json_extract(snapshot,'$.includeRecommendations') AS recommendations FROM Document
       WHERE orderId=`+linked('id')+" AND templateVersion=? AND kind='WORK_ORDER' ORDER BY version DESC LIMIT 1", [...args,completionTemplate]),
     stmt(db, "SELECT * FROM ServiceSettings WHERE id='main'"),
@@ -55,11 +57,22 @@ export async function loadOrder(ctx: Context, id: string): Promise<OrderDetail> 
   if (!customer || !vehicle) fail(500, 'Нарушена связь заказа с клиентом или автомобилем');
   order.paidCents = paidFromLedger(payments);
   const detail: OrderDetail = { ...order, customer, vehicle, master, inspectionItems: inspectionItems.map(x => ({...x, left: !!x.left, right: !!x.right})), lines, documents, payments, legacySnapshot, totals: totalsForOrder({...order, lines, legacySnapshot}) };
-  const latest = result<{hash:string; recommendations:number}>(9)[0];
+  const latest = result<{hash:string | null; previousSnapshot:string | null; recommendations:number}>(9)[0];
   const settings = result<Settings>(10)[0];
-  detail.completionActNeedsUpdate = !scoped && detail.status === 'DELIVERED' &&
-    (!latest || !settings || !!unresolvedLine(detail) || latest.hash !==
-      await completionContentHash(completionContent(detail, settings, !!latest.recommendations), detail.discountCents));
+  detail.completionActNeedsUpdate = false;
+  if (!scoped && detail.status === 'DELIVERED') {
+    if (!latest || !settings || unresolvedLine(detail)) {
+      detail.completionActNeedsUpdate = true;
+    } else {
+      let savedHash = latest.hash;
+      if (latest.previousSnapshot) {
+        const snapshot: DocumentSnapshot = JSON.parse(latest.previousSnapshot);
+        savedHash = await completionContentHash(snapshot, snapshot.totals.discountCents);
+      }
+      const current = completionContent(detail, settings, !!latest.recommendations);
+      detail.completionActNeedsUpdate = savedHash !== await completionContentHash(current, detail.discountCents);
+    }
+  }
   return detail;
 }
 export function serializeOrder(order: OrderDetail, ctx: Context): OrderDetail {
