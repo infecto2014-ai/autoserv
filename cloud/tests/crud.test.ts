@@ -104,11 +104,33 @@ it('paginates case-insensitive Cyrillic matches for both customers and vehicles'
   }
 });
 
-it('preserves literal GLOB punctuation and Unicode simple case variants in the search',async()=>{
-  const match=await customer('Й[Σ]*?');
+it('treats search punctuation literally and matches Unicode simple case variants',async()=>{
+  const match=await customer("Й[Σ]*?%_'_123");
   await customer('ЙΣ');
-  for(const q of ['й[ς]','*','?','[']){
+  for(const q of ['й[ς]','*','?','[','%',"_'",'_123']){
     const result=await request('customers?q='+encodeURIComponent(q));
     expect(result.items.map((row:{id:string})=>row.id)).toEqual([match.id]);
+  }
+});
+
+it('finds long Cyrillic substrings with database pagination under D1 search limits',async()=>{
+  const longName=('Александр '+ 'АбВгДеЁжЗиЙкЛмНоПрСтУфХцЧшЩъЫьЭюЯ'.repeat(6)).slice(0,200);
+  for(const name of [longName,longName.toUpperCase(),'Алексей']){
+    const c=await customer(name);
+    await request('vehicles','POST',{customerId:c.id,make:'Марка',model:'Модель',mileage:0});
+  }
+  // Run the actual SQLite query. User search must work even when pattern operators are unavailable.
+  db.sqlite.function('glob',(_pattern,_value)=>{throw new Error('Search passed a GLOB pattern to SQLite');});
+  db.sqlite.function('like',(_pattern,_value)=>{throw new Error('Search passed a LIKE pattern to SQLite');});
+  for(const resource of ['customers','vehicles']){
+    for(const q of ['Александр',longName.toLowerCase()]){
+      const url=resource+'?q='+encodeURIComponent(q)+'&pageSize=1&page=';
+      const a=await request(url+'1'), b=await request(url+'2');
+      expect(a.total).toBe(2);
+      expect(b.total).toBe(2);
+      expect(a.items).toHaveLength(1);
+      expect(b.items).toHaveLength(1);
+      expect(b.items[0].id).not.toBe(a.items[0].id);
+    }
   }
 });

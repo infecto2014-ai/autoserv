@@ -3,7 +3,7 @@ import { calculateTotals } from '../shared/money';
 import type { LegacyFinancialSnapshot, OrderDetail } from '../shared/types';
 import { dateFilter, financeCTE } from './overview';
 import { totalsForOrder } from './finances';
-import { searchPattern } from './search';
+import { textSearch } from './search';
 import type { Context, D1Database, D1PreparedStatement, Actor } from './types';
 import { body, fail, json, requireRole, pagination } from './common';
 import { all, first, stmt, batch, guarded, uuid, now } from './db';
@@ -96,7 +96,7 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
     const table=resource==='customers' ? 'Customer' : 'Vehicle';
     if(method==='GET' && !key) {
       const {q,page,pageSize}=pagination(request), s=scope(actor,table,'t');
-      let where=s.sql; const args=[...s.args];
+      let where=s.sql, prefix=''; const args=[...s.args];
       const dates=dateFilter(request,'o.openedAt');
       const relation=table==='Customer'?'customerId':'vehicleId';
       const masterScope=actor.role==='MASTER'?' AND o.masterId=?':'';
@@ -106,25 +106,26 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
         args.push(...dates.args,...masterArgs);
       }
       if(q){
-        const pattern=searchPattern(q), digits=q.replace(/\D/g,'');
-        const customerMatch=(alias:string)=>`(${alias}.name GLOB ? OR ${alias}.phone GLOB ? OR ${alias}.phoneNormalized GLOB ? OR ${alias}.email GLOB ?)`;
-        const customerArgs=[pattern,pattern,digits ? '*'+digits+'*' : pattern,pattern];
-        const carMatch=(alias:string)=>`(${alias}.make GLOB ? OR ${alias}.model GLOB ? OR ${alias}.vin GLOB ? OR ${alias}.plate GLOB ?)`;
-        const carArgs=[pattern,pattern,pattern,pattern];
+        const search=textSearch(q);
+        prefix=search.prefix;
+        args.unshift(...search.args);
+        const customerMatch=(alias:string)=>`(${search.matches(alias+'.name')} OR ${search.matches(alias+'.phone')}
+          OR instr(${alias}.phoneNormalized,(SELECT phone FROM searchTerm))>0 OR ${search.matches(alias+'.email')})`;
+        const carMatch=(alias:string)=>'('+['make','model','vin','plate'].map(field=>search.matches(alias+'.'+field)).join(' OR ')+')';
         const orderMatch=`EXISTS (SELECT 1 FROM WorkOrder o JOIN Customer c ON c.id=o.customerId JOIN Vehicle v ON v.id=o.vehicleId
-          WHERE o.${relation}=t.id AND ${dates.sql} AND (o.number GLOB ? OR ${table==='Customer'?carMatch('v'):customerMatch('c')})${masterScope})`;
+          WHERE o.${relation}=t.id AND ${dates.sql} AND (${search.matches('o.number')} OR ${table==='Customer'?carMatch('v'):customerMatch('c')})${masterScope})`;
         if(table==='Customer'){
           const carScope=scope(actor,'Vehicle','v');
           where+=` AND (${customerMatch('t')} OR EXISTS (SELECT 1 FROM Vehicle v WHERE v.customerId=t.id AND ${carMatch('v')} AND ${carScope.sql}) OR ${orderMatch})`;
-          args.push(...customerArgs,...carArgs,...carScope.args,...dates.args,pattern,...carArgs,...masterArgs);
+          args.push(...carScope.args,...dates.args,...masterArgs);
         }else{
           const ownerScope=scope(actor,'Customer','c');
           where+=` AND (${carMatch('t')} OR EXISTS (SELECT 1 FROM Customer c WHERE c.id=t.customerId AND ${customerMatch('c')} AND ${ownerScope.sql}) OR ${orderMatch})`;
-          args.push(...carArgs,...customerArgs,...ownerScope.args,...dates.args,pattern,...customerArgs,...masterArgs);
+          args.push(...ownerScope.args,...dates.args,...masterArgs);
         }
       }
-      const rows=await all<Row>(db,`SELECT t.* FROM ${table} t WHERE ${where} ORDER BY ${table==='Customer'?'t.name':'t.createdAt DESC'},t.id LIMIT ? OFFSET ?`,[...args,pageSize,(page-1)*pageSize]);
-      const total=await first<{total:number}>(db,`SELECT COUNT(*) total FROM ${table} t WHERE ${where}`,args);
+      const rows=await all<Row>(db,prefix+`SELECT t.* FROM ${table} t WHERE ${where} ORDER BY ${table==='Customer'?'t.name':'t.createdAt DESC'},t.id LIMIT ? OFFSET ?`,[...args,pageSize,(page-1)*pageSize]);
+      const total=await first<{total:number}>(db,prefix+`SELECT COUNT(*) total FROM ${table} t WHERE ${where}`,args);
       return json({items:table==='Vehicle' ? await ownerVehicles(db,rows,actor) : rows.map(r=>customerDTO(r,actor)), total:total?.total??0,page,pageSize});
     }
     if(method==='GET' && key) {
