@@ -6,6 +6,7 @@ import type { Customer, InspectionItem, OrderDetail, OrderLine, Payment, LegacyF
 import { calculateTotals, MAX_MONEY, MAX_QUANTITY } from '../shared/money';
 import { canTransition, isClosed } from '../shared/status';
 import { dateFilter, financeCTE } from './overview';
+import { textSearch } from './search';
 import { assertReviewed, paidFromLedger, pendingAllocations, totalsForOrder } from './finances';
 export { totalsForOrder } from './finances';
 import { body, fail, json, pagination, requireRole } from './common';
@@ -241,25 +242,36 @@ const joins = ' FROM WorkOrder o JOIN Customer c ON c.id=o.customerId JOIN Vehic
 const listingSelect = `SELECT o.*, json_object('id',c.id,'kind',c.kind,'name',c.name,'phone',c.phone,'email',c.email,'comment',c.comment,'archivedAt',c.archivedAt) AS customerJson, json_object('id',v.id,'customerId',v.customerId,'make',v.make,'model',v.model,'year',v.year,'vin',v.vin,'plate',v.plate,'mileage',v.mileage,'engine',v.engine,'comment',v.comment,'archivedAt',v.archivedAt) AS vehicleJson, m.name AS masterName,f.paidCents ledgerPaidCents,f.totalCents,f.laborCents,f.partsCents`;
 async function orderList(ctx: Context) {
   const {q, page, pageSize} = pagination(ctx.request);
-  const status = new URL(ctx.request.url).searchParams.get('status');
+  const params = new URL(ctx.request.url).searchParams;
+  const status = params.get('status');
+  const group = params.get('group');
+  const groups = {active: "o.status IN ('NEW','DIAGNOSTICS','IN_PROGRESS')", approval: "o.status='APPROVAL'", ready: "o.status='READY'", completed: "o.status='DELIVERED'"};
+  if (group && !Object.hasOwn(groups, group)) fail(422, 'Неизвестная группа заказов');
   if (status && !statusField.safeParse(status).success) fail(422, 'Неизвестный статус заказа');
   const clauses: string[] = [], args: unknown[] = [];
   if (ctx.actor.role === 'MASTER') {clauses.push('o.masterId=?'); args.push(ctx.actor.id);}
   if (status) {clauses.push('o.status=?'); args.push(status);}
+  if (group) clauses.push(groups[group as keyof typeof groups]);
   const dates = dateFilter(ctx.request, 'o.openedAt');
   clauses.push(dates.sql); args.push(...dates.args);
   if (new URL(ctx.request.url).searchParams.get('debtOnly') === '1') {
     requireRole(ctx.actor,'ADMIN','RECEPTION');
     clauses.push("o.status <> 'CANCELLED' AND f.totalCents > f.paidCents");
   }
+  let prefix = financeCTE;
   if (q) {
-    clauses.push('(o.number LIKE ? OR c.name LIKE ? OR c.phone LIKE ? OR c.phoneNormalized LIKE ? OR v.plate LIKE ? OR v.vin LIKE ? OR v.make LIKE ? OR v.model LIKE ?)');
-    const pattern = `%${q}%`; args.push(pattern, pattern, pattern, `%${q.replace(/\D/g, '') || q}%`, pattern, pattern, pattern, pattern);
+    const search = textSearch(q);
+    prefix = search.prefix.trimEnd() + ', ' + financeCTE.slice('WITH '.length);
+    const fields = ['o.number','c.name','c.phone','v.plate','v.vin','v.make','v.model'];
+    const matches = fields.map(search.matches);
+    matches.push('instr(c.phoneNormalized,(SELECT phone FROM searchTerm))>0');
+    clauses.push('(' + matches.join(' OR ') + ')');
+    args.unshift(...search.args);
   }
   const where = clauses.length ? ' WHERE ' + clauses.join(' AND ') : '';
-  const count = await first<{total: number}>(ctx.env.DB, financeCTE + ' SELECT COUNT(*) AS total' + joins + where, args);
+  const count = await first<{total: number}>(ctx.env.DB, prefix + ' SELECT COUNT(*) AS total' + joins + where, args);
   const total = count?.total ?? 0;
-  const rows = await all<OrderRow & {customerJson: string; vehicleJson: string; masterName: string | null; ledgerPaidCents:number; laborCents: number; partsCents: number; totalCents: number}>(ctx.env.DB, financeCTE + ' ' + listingSelect + joins + where + ' ORDER BY o.openedAt DESC,o.id DESC LIMIT ? OFFSET ?', [...args,pageSize,(page-1)*pageSize]);
+  const rows = await all<OrderRow & {customerJson: string; vehicleJson: string; masterName: string | null; ledgerPaidCents:number; laborCents: number; partsCents: number; totalCents: number}>(ctx.env.DB, prefix + ' ' + listingSelect + joins + where + ' ORDER BY o.openedAt DESC,o.id DESC LIMIT ? OFFSET ?', [...args,pageSize,(page-1)*pageSize]);
   const items = rows.map(({customerJson, vehicleJson, masterName, ledgerPaidCents, laborCents, partsCents, totalCents, ...row}) => {
     row.paidCents = ledgerPaidCents;
     const totals = {laborCents,partsCents,totalCents,subtotalCents:laborCents+partsCents,discountCents:row.discountCents,paidCents:row.paidCents,

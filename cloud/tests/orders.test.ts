@@ -157,6 +157,33 @@ describe('D1 orders on real SQLite', () => {
     expect(db.sqlite.prepare("SELECT mileage FROM Vehicle WHERE id='vehicle'").get()).toMatchObject({mileage: 999});
   });
 
+  it('searches Cyrillic and literal punctuation across server pages without LIKE or GLOB', async () => {
+    const name = 'Александр ' + 'Ё'.repeat(36) + ' %_[*]';
+    db.sqlite.prepare("UPDATE Customer SET name=? WHERE id='customer'").run(name);
+    db.sqlite.exec("UPDATE Vehicle SET make='Лада %_[*]' WHERE id='vehicle'");
+    const outside = await create();
+    const earlier = await create();
+    const later = await create();
+    const setDate = db.sqlite.prepare('UPDATE WorkOrder SET openedAt=? WHERE id=?');
+    setDate.run('2026-10-31T21:59:59.000Z', outside.id);
+    setDate.run('2026-10-31T22:00:00.000Z', earlier.id);
+    setDate.run('2026-11-30T21:59:59.000Z', later.id);
+    for (const name of ['like', 'glob']) {
+      db.sqlite.function(name, {varargs: true}, () => { throw new Error('D1 pattern length is limited'); });
+    }
+    const period = 'from=2026-11-01&to=2026-11-30&group=active&pageSize=1';
+    for (const q of [name.toLowerCase(), 'лада %_[*]', '%_[*]', '+7 (900) 1234567']) {
+      const results = await Promise.all([1, 2, 3].map(page => call<{items: OrderDetail[]; total: number}>(
+        'GET', `/orders?${period}&q=${encodeURIComponent(q)}&page=${page}`,
+      )));
+      expect(results.map(r => r.total)).toEqual([2, 2, 2]);
+      expect(results.map(r => r.items.map(item => item.id))).toEqual([[later.id], [earlier.id], []]);
+    }
+    const byNumber = (number: string) => call<{total: number}>('GET', `/orders?${period}&q=${encodeURIComponent(number)}`);
+    expect((await byNumber(outside.number)).total).toBe(0);
+    expect((await byNumber(later.number)).total).toBe(1);
+  });
+
   it('lists persisted rows with filtering and totals, and does not expose CSV', async () => {
     const order = await create();
     const result = await call<{items: OrderDetail[]; total: number}>('GET', '/orders?q=VINTEST&pageSize=1');

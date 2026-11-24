@@ -82,6 +82,9 @@ export interface OrderLine {
   variant: PartVariant;
   article: string;
   inspectionItemId?: string | null;
+  approval: "PENDING" | "APPROVED" | "DEFERRED";
+  completed: boolean;
+  partSource: "SERVICE" | "CUSTOMER";
 }
 export interface Totals {
   laborCents: number;
@@ -91,6 +94,7 @@ export interface Totals {
   totalCents: number;
   paidCents: number;
   balanceCents: number;
+  overpaidCents: number;
 }
 export interface DocumentMeta {
   id: string;
@@ -99,6 +103,7 @@ export interface DocumentMeta {
   version: number;
   createdAt: string;
   sha256: string;
+  templateVersion: string;
 }
 export interface OrderDetail {
   id: string;
@@ -122,6 +127,10 @@ export interface OrderDetail {
   inspectionItems: InspectionItem[];
   lines: OrderLine[];
   documents: DocumentMeta[];
+  financialMode: "LEGACY" | "WORKFLOW";
+  legacySnapshot: (Totals & { orderId: string }) | null;
+  payments: Payment[];
+  completionActNeedsUpdate: boolean;
   totals: Totals;
 }
 export interface Settings {
@@ -137,4 +146,16 @@ export interface PageResult<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface Payment {
+  id: string;
+  kind: "OPENING" | "PAYMENT" | "REFUND";
+  amountCents: number;
+  laborCents: number;
+  partsCents: number;
+  unallocatedCents: number;
+  occurredAt: string | null;
+  relatedPaymentId: string | null;
+  reason: string | null;
 }

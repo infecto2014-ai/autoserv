@@ -1605,3 +1605,65 @@ footer {
     box-shadow: none;
   }
 }
+
+/* Reception workflow */
+body { font-size: 16px; }
+small, .muted, .field > label, .field > small, .toolbar, .topbar, .badge { font-size: 14px; }
+.sidebar nav { margin-top: 24px; }
+a.stat { color: var(--text); text-decoration: none; }
+a.stat:hover { border-color: var(--primary); }
+.stat strong { overflow-wrap: anywhere; }
+.period-filter, .inline-fields, .selection-row, .filter-toolbar, .line-decisions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+.filter-toolbar > .field:first-child { flex: 1 1 260px; }
+.period-filter .field, .filter-toolbar .field, .inline-fields .field, .line-decisions .field { margin: 0; }
+.check-label { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; }
+.check-label input { width: 18px; height: 18px; flex: 0 0 18px; }
+.form-fields { padding: 0; margin: 0; border: 0; min-width: 0; }
+.form-fields details > summary, .total-panel summary { cursor: pointer; color: var(--primary); }
+.form-fields details .form-grid { margin-top: 12px; }
+.selection-row { justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.intake-matches { margin-bottom: 16px; }
+.section-switch { padding: 0 20px; }
+.history-content { padding: 16px 22px 24px; }
+.history-list, .masters-list { list-style: none; margin: 16px 0; padding: 0; }
+.history-list li, .masters-list li { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.history-list li { display: flex; gap: 16px; justify-content: space-between; }
+.history-list li small, .history-list li span { display: block; }
+.line-card {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+.line-fields { display: grid; grid-template-columns: minmax(140px, 2fr) repeat(2, minmax(100px, 1fr)); gap: 10px; }
+.line-fields > .field { margin: 0; }
+.line-decisions { margin-top: 10px; align-items: end; }
+.line-decisions .danger { margin-left: auto; }
+.payments-panel { margin-top: 16px; }
+.total-panel dl { margin-bottom: 12px; }
+.act-totals { display: flex; flex-wrap: wrap; gap: 22px; padding: 12px 0; }
+.act-totals dd { margin: 0; font-weight: 700; }
+.act-lines { padding-left: 24px; }
+@media (max-width: 650px) {
+  .line-fields { grid-template-columns: 1fr 1fr; }
+  .line-fields .field:first-child { grid-column: 1 / -1; }
+  .period-filter { align-items: stretch; }
+}
+
+.sidebar .brand { white-space: nowrap; font-size: 20px; }
+.sidebar nav a, .stat > div, .stat small, .primary, .secondary,
+.field input, .field select, .field textarea, .panel-heading p,
+.total-panel dl > div, .total-balance, .total-panel > small, .save-state { font-size: 14px; }
+.stat > div { gap: 10px; }
+.stats { margin-top: 16px; }
+.paid-label { color: #166534; font-weight: 600; }
+.skip:not(:focus) { clip-path: inset(100%); }
+
+.order-transition { align-items: end; }
+.order-transition .field { margin: 0; }

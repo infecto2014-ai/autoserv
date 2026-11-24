@@ -4,12 +4,8 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 import {
-  ArrowLeft,
-  Check,
-  ChevronRight,
   Download,
   ExternalLink,
   FileText,
@@ -17,36 +13,23 @@ import {
   Printer,
   RefreshCw,
   Save,
-  Trash2,
 } from "lucide-react";
 import type {
   Actor,
-  Vehicle,
   Staff,
-  PageResult,
   OrderDetail,
   InspectionItem,
-  OrderLine,
   DocumentMeta,
-  OrderStatus,
   PartVariant,
 } from "@/lib/types";
 import { api, ApiError, conditions, date, statuses } from "@/lib/client";
-import {
-  parseMoney,
-  formatMoney as moneyWithCurrency,
-  parseQuantity,
-  formatQuantity,
-} from "@/lib/money";
+import { useDraftGuard } from "@/lib/workflow";
+import { NumberField } from "./number-field";
+import { OrderFinances } from "./order-finances";
+import { ActForm, OrderDetailsForm, documentLabel } from "./order-actions";
 import { Empty, Field, Modal, Notice, SearchBox } from "./ui";
-const formatMoney = (cents: number) =>
-  moneyWithCurrency(cents).replace(/\s*₽$/, "");
-function validEditor() {
-  const inputs = document.querySelectorAll<
-    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-  >(
-    "main input:not(:disabled),main select:not(:disabled),main textarea:not(:disabled)",
-  );
+function validInspection() {
+  const inputs = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(".inspection-panel input,.inspection-panel textarea");
   for (const input of inputs) {
     if (!input.checkValidity()) {
       input.reportValidity();
@@ -54,196 +37,6 @@ function validEditor() {
     }
   }
   return true;
-}
-export function NewOrder({
-  close,
-  onCreated,
-}: {
-  close: () => void;
-  onCreated: (o: OrderDetail) => void;
-}) {
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]),
-    [staff, setStaff] = useState<Staff[]>([]),
-    [q, setQ] = useState(""),
-    [vehicle, setVehicle] = useState(""),
-    [mileage, setMileage] = useState(0),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
-  useEffect(() => {
-    let active = true;
-    api<PageResult<Vehicle>>(
-      `/vehicles?q=${encodeURIComponent(q)}&pageSize=100`,
-    )
-      .then((r) => active && setVehicles(r.items))
-      .catch((e) => active && setError(e.message));
-    return () => {
-      active = false;
-    };
-  }, [q]);
-  useEffect(() => {
-    api<{ items: Staff[] }>("/staff")
-      .then((r) =>
-        setStaff(r.items.filter((s) => s.role === "MASTER" && s.active)),
-      )
-      .catch((e) => setError(e.message));
-  }, []);
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    const d = Object.fromEntries(new FormData(e.currentTarget));
-    try {
-      onCreated(
-        await api<OrderDetail>("/orders", "POST", {
-          vehicleId: vehicle,
-          masterId: d.masterId || null,
-          mileage,
-          complaint: d.complaint,
-        }),
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Modal title="Новый заказ-наряд" close={close}>
-      <form onSubmit={submit}>
-        {error && <Notice>{error}</Notice>}
-        <Field label="Найти автомобиль">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Марка, госномер, VIN или владелец"
-          />
-        </Field>
-        <Field label="Автомобиль и клиент">
-          <select
-            value={vehicle}
-            required
-            onChange={(e) => {
-              setVehicle(e.target.value);
-              setMileage(
-                vehicles.find((v) => v.id === e.target.value)?.mileage || 0,
-              );
-            }}
-          >
-            <option value="">Выберите автомобиль</option>
-            {vehicles.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.make} {v.model} · {v.plate || "без номера"} ·{" "}
-                {v.customer?.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <p className="muted">
-          Нет автомобиля? Сначала добавьте клиента и автомобиль в
-          соответствующих разделах.
-        </p>
-        <div className="form-grid">
-          <Field label="Пробег, км">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              required
-              value={mileage}
-              onChange={(e) => setMileage(Number(e.target.value))}
-            />
-          </Field>
-          <Field label="Ответственный мастер">
-            <select name="masterId">
-              <option value="">Назначить позже</option>
-              {staff.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <Field label="Жалоба / причина обращения">
-          <textarea name="complaint" required rows={3} />
-        </Field>
-        <div className="form-footer">
-          <button type="button" className="secondary" onClick={close}>
-            Отмена
-          </button>
-          <button className="primary" disabled={busy || !vehicle}>
-            {busy ? "Создаём…" : "Создать заказ"}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-function NumberField({
-  id,
-  value,
-  onChange,
-  quantity = false,
-  disabled = false,
-  label,
-}: {
-  id?: string;
-  value: number;
-  onChange: (n: number) => void;
-  quantity?: boolean;
-  disabled?: boolean;
-  label: string;
-}) {
-  const display = quantity ? formatQuantity : formatMoney;
-  const [raw, setRaw] = useState(display(value));
-  const focused = useRef(false);
-  useEffect(() => {
-    if (!focused.current) queueMicrotask(() => setRaw(display(value)));
-  }, [value, display]);
-  return (
-    <input
-      id={id}
-      className="number-input"
-      aria-label={label}
-      inputMode="decimal"
-      value={raw}
-      disabled={disabled}
-      onFocus={() => {
-        focused.current = true;
-      }}
-      onChange={(e) => {
-        const text = e.target.value;
-        setRaw(text);
-        try {
-          const n = quantity ? parseQuantity(text) : parseMoney(text);
-          if (quantity && n <= 0)
-            throw new Error("Количество должно быть больше нуля");
-          e.target.setCustomValidity("");
-          if (n !== value) onChange(n);
-        } catch (err) {
-          e.target.setCustomValidity((err as Error).message);
-        }
-      }}
-      onBlur={(e) => {
-        focused.current = false;
-        try {
-          const result = quantity ? parseQuantity(raw) : parseMoney(raw);
-          if (result < 0 || (quantity && result === 0))
-            throw new Error(
-              quantity
-                ? "Количество должно быть больше нуля"
-                : "Значение не может быть отрицательным",
-            );
-          if (result !== value) onChange(result);
-          setRaw(display(result));
-          e.target.setCustomValidity("");
-        } catch (err) {
-          e.target.setCustomValidity((err as Error).message);
-          e.target.reportValidity();
-        }
-      }}
-    />
-  );
 }
 export function OrderEditor({ id, user }: { id: string; user: Actor }) {
   const [order, setOrder] = useState<OrderDetail | null>(null),
@@ -259,7 +52,15 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     [selected, setSelected] = useState<string[]>([]),
     [filter, setFilter] = useState(""),
     [preview, setPreview] = useState<DocumentMeta | null>(null),
-    [staff, setStaff] = useState<Staff[]>([]);
+    [staff, setStaff] = useState<Staff[]>([]),
+    [staffError, setStaffError] = useState(""),
+    [financeDraft, setFinanceDraft] = useState(false),
+    [financeInstance, resetFinance] = useState(0),
+    [act, setAct] = useState<"deliver" | "version" | null>(null),
+    [details, setDetails] = useState(false),
+    [feedback, setFeedback] = useState("");
+  const reportDraft = useCallback(() => setError("Сохраните или отмените изменения перед переходом."), []);
+  useDraftGuard(dirty || financeDraft || busy, reportDraft);
   const version = useRef(0),
     editRevision = useRef(0),
     saving = useRef(false),
@@ -268,8 +69,8 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     draft.current = { items, recommendations };
   }, [items, recommendations]);
   const master = user.role === "MASTER",
-    locked = !!order && ["DELIVERED", "CANCELLED"].includes(order.status),
-    editable = !locked && !conflict;
+    locked = !!order && order.status === "CANCELLED",
+    editable = !locked && !conflict && !busy;
   const accept = useCallback((o: OrderDetail) => {
     version.current = o.version;
     setOrder(o);
@@ -285,6 +86,8 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
       setError("");
       setSaveStatus("Сохранено");
       setSelected([]);
+      setFinanceDraft(false);
+      resetFinance((n) => n + 1);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -295,7 +98,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
       .then((r) =>
         setStaff(r.items.filter((s) => s.role === "MASTER" && s.active)),
       )
-      .catch(() => {});
+      .catch((err) => setStaffError(err.message));
   }, [load]);
   function edited() {
     editRevision.current += 1;
@@ -305,7 +108,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
   }
   const save = useCallback(async () => {
     if (saving.current) return false;
-    if (!validEditor()) {
+    if (!validInspection()) {
       setSaveStatus("Исправьте значение поля");
       setError("Исправьте отмеченное значение перед сохранением.");
       return false;
@@ -336,7 +139,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     }
   }, [id, accept]);
   useEffect(() => {
-    if (!dirty || conflict || locked) return;
+    if (!dirty || busy || conflict || locked) return;
     const timeout = setTimeout(() => {
       void save().then((ok) => {
         if (ok && editRevision.current !== revision)
@@ -344,75 +147,61 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
       });
     }, 850);
     return () => clearTimeout(timeout);
-  }, [dirty, revision, conflict, locked, save, order?.version]);
-  useEffect(() => {
-    if (!dirty) return;
-    function before(e: BeforeUnloadEvent) {
-      e.preventDefault();
-    }
-    function navigate(e: MouseEvent) {
-      const anchor = (e.target as Element).closest('a[href^="#"]');
-      if (anchor && anchor.getAttribute("href") !== location.hash) {
-        e.preventDefault();
-        e.stopPropagation();
-        setError(
-          "Дождитесь сохранения осмотра перед переходом в другой раздел.",
-        );
-      }
-    }
-    window.addEventListener("beforeunload", before);
-    document.addEventListener("click", navigate, true);
-    return () => {
-      window.removeEventListener("beforeunload", before);
-      document.removeEventListener("click", navigate, true);
-    };
-  }, [dirty]);
-  async function mutate(
-    path: string,
-    method: string,
-    body: Record<string, unknown>,
-  ) {
-    if (!validEditor()) {
-      setError("Исправьте отмеченное значение перед сохранением.");
-      return;
-    }
-    if (dirty || saving.current) {
-      setError("Дождитесь сохранения осмотра перед следующим действием.");
-      return;
-    }
+  }, [busy, dirty, revision, conflict, locked, save, order?.version]);
+  async function run<T>(operation: () => Promise<T>): Promise<T> {
     setBusy(true);
     setError("");
+    setFeedback("");
     try {
-      const o = await api<OrderDetail>(`/orders/${id}${path}`, method, {
-        version: version.current,
-        ...body,
-      });
-      accept(o);
-      if (path === "/transfer") setSelected([]);
-    } catch (e) {
-      setError((e as Error).message);
-      if ((e as ApiError).status === 409) setConflict(true);
+      return await operation();
+    } catch (err) {
+      setError((err as Error).message);
+      if (err instanceof ApiError && err.status === 409 && /заказ изменён|обновите данные/i.test(err.message)) setConflict(true);
+      throw err;
     } finally {
       setBusy(false);
     }
   }
-  async function generateDocument(kind: "INSPECTION" | "WORK_ORDER") {
-    if (!order || !validEditor()) return;
-    setBusy(true);
-    try {
-      const doc = await api<DocumentMeta>(`/orders/${id}/documents`, "POST", {
-        kind,
-        version: order.version,
-      });
-      const updated = await api<OrderDetail>(`/orders/${id}`);
+  async function mutate(path: string, method: string, body: Record<string, unknown>) {
+    return run(async () => {
+      const updated = await api<OrderDetail>(`/orders/${id}${path}`, method, { version: version.current, ...body });
       accept(updated);
-      setPreview(doc);
-    } catch (e) {
-      setError((e as Error).message);
-      if ((e as ApiError).status === 409) setConflict(true);
-    } finally {
-      setBusy(false);
+      if (path === "/transfer") {
+        setSelected([]);
+        setTab("lines");
+        setFeedback("Позиции перенесены. Укажите решения клиента по каждой строке.");
+      } else {
+        if (path === "/lines" && updated.lines.some((line) =>
+          line.approval === "PENDING" && order?.lines.some((old) => old.id === line.id && old.approval === "APPROVED"),
+        )) setFeedback("Изменённые позиции нужно согласовать повторно.");
+        else setFeedback("Изменения сохранены.");
+      }
+      return updated;
+    });
+  }
+  function changeOrder(body: Record<string, unknown>) {
+    void mutate("", "PATCH", body).catch(() => {});
+  }
+  async function generateInspection() {
+    try {
+      await run(async () => {
+        const doc = await api<DocumentMeta>(`/orders/${id}/documents`, "POST", {
+          kind: "INSPECTION", version: version.current,
+        });
+        setPreview(doc);
+        accept(await api<OrderDetail>(`/orders/${id}`));
+      });
+    } catch { /* The editor reports the failure and keeps the current draft. */ }
+  }
+  function chooseTab(key: string) {
+    if (key === tab) return;
+    if (financeDraft || dirty || saving.current) {
+      setError("Сохраните или отмените изменения перед переходом.");
+      return;
     }
+    setError("");
+    setFeedback("");
+    setTab(key);
   }
   function updateItem(itemId: string, patch: Partial<InspectionItem>) {
     setItems((current) =>
@@ -424,22 +213,16 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     return (
       <section className="panel pad">
         {error ? <Notice>{error}</Notice> : <p>Загружаем заказ…</p>}
+        {error && <button className="secondary" onClick={() => void load()}>Повторить</button>}
         <a href="#orders">Вернуться к заказам</a>
       </section>
     );
-  const canAct = !busy && !dirty && !conflict && saveStatus !== "Сохраняется…";
-  const next: Partial<Record<OrderStatus, OrderStatus>> = {
-    NEW: "DIAGNOSTICS",
-    DIAGNOSTICS: "APPROVAL",
-    APPROVAL: "IN_PROGRESS",
-    IN_PROGRESS: "READY",
-    READY: "DELIVERED",
-  };
-  const nextStatus = next[order.status];
+  const canSaveFinance = !busy && !dirty && !conflict && saveStatus !== "Сохраняется…";
+  const canAct = canSaveFinance && !financeDraft;
+  const group = order.status === "APPROVAL" || order.status === "READY" ? order.status : "IN_PROGRESS";
   return (
     <>
       <a className="back-link" href="#orders">
-        <ArrowLeft size={16} />
         Все заказы
       </a>
       <section className="panel order-summary">
@@ -469,8 +252,8 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
           </div>
           <div>
             <small>КЛИЕНТ</small>
-            <strong>{order.customer.name}</strong>
-            <a href={`tel:${order.customer.phone}`}>{order.customer.phone}</a>
+            <strong>{order.customer.name || "Имя не указано"}</strong>
+            {order.customer.phone && <a href={`tel:${order.customer.phone}`}>{order.customer.phone}</a>}
           </div>
           <div>
             <small>МАСТЕР</small>
@@ -480,10 +263,11 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                 value={order.masterId || ""}
                 disabled={!canAct}
                 onChange={(e) =>
-                  void mutate("", "PATCH", { masterId: e.target.value || null })
+                  changeOrder({ masterId: e.target.value || null })
                 }
               >
                 <option value="">Не назначен</option>
+                {order.masterId && !staff.some((s) => s.id === order.masterId) && <option value={order.masterId}>{order.master?.name || "Назначенный мастер"}</option>}
                 {staff.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -498,13 +282,15 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
         <div className="complaint">
           <small>ПРИЧИНА ОБРАЩЕНИЯ</small>
           <p>{order.complaint}</p>
+          {order.comment && <p>{order.comment}</p>}
+          {editable && !master && <button className="secondary" disabled={!canAct} onClick={() => setDetails(true)}>Изменить сведения</button>}
         </div>
         <div className="order-actions">
           <div className={`save-state ${dirty ? "pending" : ""}`} role="status">
             <span />
             {saveStatus}
           </div>
-          <div className="actions">
+          <div className="actions order-transition">
             {dirty && !conflict && (
               <button
                 className="secondary"
@@ -515,21 +301,17 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                 Сохранить сейчас
               </button>
             )}
-            {nextStatus &&
-              editable &&
-              (!master || nextStatus !== "DELIVERED") && (
-                <button
-                  className="primary"
-                  disabled={!canAct}
-                  onClick={() =>
-                    void mutate("", "PATCH", { status: nextStatus })
-                  }
-                >
-                  {statuses[nextStatus]}
-                  <ChevronRight size={16} />
-                </button>
-              )}
-            {!master && editable && (
+            {!locked && order.status !== "DELIVERED" && <Field label="Группа заказа">
+              <select value={group} disabled={!canAct} onChange={(e) => changeOrder({ status: e.target.value })}>
+                <option value="IN_PROGRESS">Активный</option>
+                <option value="APPROVAL">На согласовании</option>
+                <option value="READY">Готов к выдаче</option>
+              </select>
+            </Field>}
+            {!master && editable && order.status === "READY" && (
+              <button className="primary" disabled={!canAct} onClick={() => setAct("deliver")}>Выдать автомобиль</button>
+            )}
+            {!master && editable && order.status !== "DELIVERED" && (
               <button
                 className="secondary"
                 disabled={!canAct}
@@ -539,7 +321,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                       "Отменить заказ? После отмены редактирование будет закрыто.",
                     )
                   )
-                    void mutate("", "PATCH", { status: "CANCELLED" });
+                    changeOrder({ status: "CANCELLED" });
                 }}
               >
                 Отменить заказ
@@ -549,6 +331,8 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
         </div>
       </section>
       {error && <Notice>{error}</Notice>}
+      {staffError && !master && <Notice>{staffError}</Notice>}
+      {feedback && <div className="success" role="status">{feedback}</div>}
       {conflict && (
         <div className="notice">
           Заказ изменён другим сотрудником. Ваши правки остаются на экране.
@@ -569,23 +353,28 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
           </button>
         </div>
       )}
-      {locked && (
-        <div className="success">
-          Заказ {order.status === "DELIVERED" ? "выдан" : "отменён"}. История
-          доступна для просмотра.
+      {order.financialMode === "LEGACY" && !master && <div className="notice">
+        Расчёт перенесён. Перед изменением сумм сверяйте позиции в разделе «Работы и запчасти».
+      </div>}
+      {locked && <div className="success">Заказ отменён. История доступна для просмотра.</div>}
+      {order.status === "DELIVERED" && !master && (
+        <div className={order.completionActNeedsUpdate ? "notice" : "success"}>
+          Автомобиль выдан{order.closedAt ? ` ${date(order.closedAt)}` : ""}. {order.completionActNeedsUpdate
+            ? "Актуальный акт требуется сформировать в разделе «Документы»."
+            : "Правки и доплата доступны в карточке заказа."}
         </div>
       )}
       <div className="tabs" role="tablist" aria-label="Разделы заказа">
         {[
           ["inspection", "Осмотр", items.length],
           ["lines", "Работы и запчасти", order.lines.length],
-          ["documents", "Документы", order.documents.length],
+          ...(!master ? [["documents", "Документы", order.documents.length]] : []),
         ].map(([key, label, count]) => (
           <button
             key={key}
             role="tab"
             aria-selected={tab === key}
-            onClick={() => setTab(String(key))}
+            onClick={() => chooseTab(String(key))}
             className={tab === key ? "active" : ""}
           >
             {label}
@@ -594,23 +383,23 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
         ))}
       </div>
       {tab === "inspection" ? (
-        <section className="panel">
+        <section className="panel inspection-panel">
           <div className="panel-heading">
             <div>
               <h2>Акт осмотра автомобиля</h2>
               <p>
-                Отмечайте состояние и стороны L / R. Изменения сохраняются
-                автоматически.
+                Отметьте состояние и стороны L / R, укажите цены и выберите нужные пункты.
+                Осмотр сохраняется автоматически. Кнопка «В заказ» добавит выбранное для согласования.
               </p>
             </div>
             {!master && editable && (
               <button
                 className="primary"
-                disabled={!selected.length || !canAct}
+                disabled={!selected.length || !canAct || order.financialMode === "LEGACY"}
                 onClick={() =>
                   void mutate("/transfer", "POST", {
                     inspectionItemIds: selected,
-                  })
+                  }).catch(() => {})
                 }
               >
                 <Plus size={17} />В заказ ({selected.length})
@@ -623,6 +412,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
               onChange={setFilter}
               placeholder="Найти пункт осмотра"
             />
+            <a className="secondary button" href="#catalog">Справочник осмотра</a>
             <span className="muted">
               {items.filter((i) => i.condition !== "UNCHECKED").length} из{" "}
               {items.length} осмотрено
@@ -715,6 +505,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                                 quantity
                                 value={i.quantityMilli}
                                 disabled={!editable}
+                                onInvalidDraft={edited}
                                 onChange={(n) =>
                                   updateItem(i.id, { quantityMilli: n })
                                 }
@@ -725,6 +516,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                                 label={`Цена работы ${i.name}`}
                                 value={i.laborPriceCents}
                                 disabled={!editable}
+                                onInvalidDraft={edited}
                                 onChange={(n) =>
                                   updateItem(i.id, { laborPriceCents: n })
                                 }
@@ -735,6 +527,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                                 label={`Цена оригинала ${i.name}`}
                                 value={i.originalPriceCents}
                                 disabled={!editable}
+                                onInvalidDraft={edited}
                                 onChange={(n) =>
                                   updateItem(i.id, { originalPriceCents: n })
                                 }
@@ -745,6 +538,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                                 label={`Цена аналога ${i.name}`}
                                 value={i.analogPriceCents}
                                 disabled={!editable}
+                                onInvalidDraft={edited}
                                 onChange={(n) =>
                                   updateItem(i.id, { analogPriceCents: n })
                                 }
@@ -755,6 +549,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                                 label={`Своя цена ${i.name}`}
                                 value={i.customPriceCents}
                                 disabled={!editable}
+                                onInvalidDraft={edited}
                                 onChange={(n) =>
                                   updateItem(i.id, { customPriceCents: n })
                                 }
@@ -814,12 +609,16 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
           </div>
         </section>
       ) : tab === "lines" ? (
-        <Lines
+        <OrderFinances
+          key={financeInstance}
           order={order}
           master={master}
-          disabled={!editable || !canAct}
-          save={(lines) => mutate("/lines", "PUT", { lines })}
-          patch={(body) => mutate("", "PATCH", body)}
+          disabled={!editable || !canSaveFinance}
+          onDraft={setFinanceDraft}
+          mutate={mutate}
+          onPayment={(updated) => { accept(updated); setFeedback("Движение средств сохранено."); }}
+          onBusy={setBusy}
+          onConflict={(message) => { setError(message); setConflict(true); }}
         />
       ) : (
         <section className="panel">
@@ -834,19 +633,15 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                   <button
                     className="secondary"
                     disabled={!canAct}
-                    onClick={() => void generateDocument("INSPECTION")}
+                    onClick={() => void generateInspection()}
                   >
                     <FileText size={16} />
                     Акт осмотра
                   </button>
-                  <button
-                    className="primary"
-                    disabled={!canAct}
-                    onClick={() => void generateDocument("WORK_ORDER")}
-                  >
-                    <FileText size={16} />
-                    Заказ-наряд
-                  </button>
+                  {order.status === "DELIVERED" && <button
+                    className="primary" disabled={!canAct || order.financialMode === "LEGACY"} onClick={() => setAct("version")}>
+                    <FileText size={16} /> Новая версия акта
+                  </button>}
                 </>
               )}
             </div>
@@ -860,7 +655,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
                   <FileText size={24} />
                   <div>
                     <strong>
-                      {d.kind === "INSPECTION" ? "Акт осмотра" : "Заказ-наряд"}{" "}
+                      {documentLabel(d)}{" "}
                       № {d.number}
                     </strong>
                     <small>
@@ -885,9 +680,25 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
           )}
         </section>
       )}
+      {act && <ActForm
+        mode={act} order={order} close={() => setAct(null)}
+        saved={(doc, updated, message) => {
+          if (updated) accept(updated);
+          setAct(null);
+          setTab("documents");
+          setPreview(doc);
+          setFeedback("Акт сохранён.");
+          if (message) { setError(message); setConflict(true); }
+        }}
+        onDraft={setFinanceDraft}
+        onConflict={(message) => { setError(message); setConflict(true); }}
+      />}
+      {details && <OrderDetailsForm order={order} close={() => setDetails(false)}
+        save={(body) => mutate("", "PATCH", body)}
+      />}
       {preview && (
         <Modal
-          title={`${preview.kind === "INSPECTION" ? "Акт осмотра" : "Заказ-наряд"} № ${preview.number}`}
+          title={`${documentLabel(preview)} № ${preview.number}`}
           close={() => setPreview(null)}
         >
           <div className="actions pdf-actions">
@@ -929,287 +740,5 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
         </Modal>
       )}
     </>
-  );
-}
-function Lines({
-  order,
-  master,
-  disabled,
-  save,
-  patch,
-}: {
-  order: OrderDetail;
-  master: boolean;
-  disabled: boolean;
-  save: (l: OrderLine[]) => Promise<void>;
-  patch: (b: Record<string, unknown>) => Promise<void>;
-}) {
-  const [lines, setLines] = useState<OrderLine[]>(order.lines),
-    [discount, setDiscount] = useState(order.discountCents),
-    [paid, setPaid] = useState(order.paidCents),
-    [changed, setChanged] = useState(false);
-  useEffect(() => {
-    queueMicrotask(() => {
-      setLines(order.lines);
-      setChanged(false);
-      setDiscount(order.discountCents);
-      setPaid(order.paidCents);
-    });
-  }, [order.lines, order.discountCents, order.paidCents]);
-  function update(index: number, body: Partial<OrderLine>) {
-    setLines((ls) => ls.map((l, i) => (i === index ? { ...l, ...body } : l)));
-    setChanged(true);
-  }
-  if (master)
-    return (
-      <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Назначенные работы и запчасти</h2>
-            <p>Финансовое редактирование доступно приёмщику.</p>
-          </div>
-        </div>
-        {order.lines.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Тип</th>
-                  <th>Наименование</th>
-                  <th>Количество</th>
-                </tr>
-              </thead>
-              <tbody>
-                {order.lines.map((l, i) => (
-                  <tr key={l.id || i}>
-                    <td>{l.kind === "LABOR" ? "Работа" : "Запчасть"}</td>
-                    <td>{l.name}</td>
-                    <td>{formatQuantity(l.quantityMilli)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty>Позиции ещё не добавлены.</Empty>
-        )}
-      </section>
-    );
-  return (
-    <div className="financial-layout">
-      <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Работы и запчасти</h2>
-            <p>Перенос из осмотра и дополнительные позиции</p>
-          </div>
-          <button
-            className="primary"
-            disabled={disabled || !changed}
-            onClick={() => void save(lines)}
-          >
-            <Save size={16} />
-            Сохранить строки
-          </button>
-        </div>
-        {(["LABOR", "PART"] as const).map((kind) => (
-          <div className="line-section" key={kind}>
-            <div className="line-heading">
-              <h3>{kind === "LABOR" ? "Работы" : "Запчасти"}</h3>
-              <button
-                className="secondary"
-                disabled={disabled}
-                onClick={() => {
-                  setLines((l) => [
-                    ...l,
-                    {
-                      kind,
-                      name: "",
-                      quantityMilli: 1000,
-                      unitPriceCents: 0,
-                      variant: "NONE",
-                      article: "",
-                    },
-                  ]);
-                  setChanged(true);
-                }}
-              >
-                <Plus size={16} />
-                Добавить
-              </button>
-            </div>
-            <div className="table-wrap">
-              <table className="lines-table">
-                <thead>
-                  <tr>
-                    <th>Наименование</th>
-                    {kind === "PART" && <th>Артикул / вариант</th>}
-                    <th>Кол-во</th>
-                    <th>Цена, ₽</th>
-                    <th>Сумма, ₽</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, index) =>
-                    l.kind === kind ? (
-                      <tr key={l.id || `new-${index}`}>
-                        <td>
-                          <input
-                            aria-label={`Название позиции ${index + 1}`}
-                            required
-                            value={l.name}
-                            disabled={disabled}
-                            onChange={(e) =>
-                              update(index, { name: e.target.value })
-                            }
-                          />
-                        </td>
-                        {kind === "PART" && (
-                          <td>
-                            <input
-                              aria-label={`Артикул ${index + 1}`}
-                              placeholder="Артикул"
-                              value={l.article || ""}
-                              disabled={disabled}
-                              onChange={(e) =>
-                                update(index, { article: e.target.value })
-                              }
-                            />
-                            <select
-                              aria-label={`Вариант запчасти ${index + 1}`}
-                              value={l.variant}
-                              disabled={disabled}
-                              onChange={(e) =>
-                                update(index, {
-                                  variant: e.target.value as PartVariant,
-                                })
-                              }
-                            >
-                              <option value="NONE">Не указан</option>
-                              <option value="ORIGINAL">Оригинал</option>
-                              <option value="ANALOG">Аналог</option>
-                              <option value="CUSTOM">Другой</option>
-                            </select>
-                          </td>
-                        )}
-                        <td>
-                          <NumberField
-                            label={`Количество позиции ${index + 1}`}
-                            quantity
-                            value={l.quantityMilli}
-                            disabled={disabled}
-                            onChange={(n) =>
-                              update(index, { quantityMilli: n })
-                            }
-                          />
-                        </td>
-                        <td>
-                          <NumberField
-                            label={`Цена позиции ${index + 1}`}
-                            value={l.unitPriceCents}
-                            disabled={disabled}
-                            onChange={(n) =>
-                              update(index, { unitPriceCents: n })
-                            }
-                          />
-                        </td>
-                        <td className="money">
-                          {formatMoney(
-                            Math.round(
-                              (l.unitPriceCents * l.quantityMilli) / 1000,
-                            ),
-                          )}
-                        </td>
-                        <td>
-                          <button
-                            className="icon danger"
-                            aria-label="Удалить строку"
-                            disabled={disabled}
-                            onClick={() => {
-                              setLines((ls) =>
-                                ls.filter((_, i) => i !== index),
-                              );
-                              setChanged(true);
-                            }}
-                          >
-                            <Trash2 size={17} />
-                          </button>
-                        </td>
-                      </tr>
-                    ) : null,
-                  )}
-                </tbody>
-              </table>
-              {!lines.some((l) => l.kind === kind) && (
-                <Empty>
-                  Нет позиций. Добавьте вручную или перенесите из осмотра.
-                </Empty>
-              )}
-            </div>
-          </div>
-        ))}
-        {changed && (
-          <div className="notice">
-            Изменения строк ещё не сохранены. Нажмите «Сохранить строки».
-          </div>
-        )}
-      </section>
-      <aside className="panel total-panel">
-        <h2>Стоимость заказа</h2>
-        <dl>
-          <div>
-            <dt>Работы</dt>
-            <dd>{formatMoney(order.totals.laborCents)} ₽</dd>
-          </div>
-          <div>
-            <dt>Запчасти</dt>
-            <dd>{formatMoney(order.totals.partsCents)} ₽</dd>
-          </div>
-          <div>
-            <dt>До скидки</dt>
-            <dd>{formatMoney(order.totals.subtotalCents)} ₽</dd>
-          </div>
-        </dl>
-        <Field label="Скидка, ₽">
-          <NumberField
-            label="Скидка в рублях"
-            value={discount}
-            disabled={disabled}
-            onChange={setDiscount}
-          />
-        </Field>
-        <Field label="Оплачено, ₽">
-          <NumberField
-            label="Оплачено в рублях"
-            value={paid}
-            disabled={disabled}
-            onChange={setPaid}
-          />
-        </Field>
-        <button
-          className="secondary full"
-          disabled={
-            disabled ||
-            (paid === order.paidCents && discount === order.discountCents)
-          }
-          onClick={() =>
-            void patch({ discountCents: discount, paidCents: paid })
-          }
-        >
-          <Check size={16} />
-          Сохранить оплату и скидку
-        </button>
-        <div className="total-final">
-          <span>Итого</span>
-          <strong>{formatMoney(order.totals.totalCents)} ₽</strong>
-        </div>
-        <div className="total-balance">
-          <span>К оплате</span>
-          <strong>{formatMoney(order.totals.balanceCents)} ₽</strong>
-        </div>
-        <small>Итоги рассчитаны по сохранённым позициям.</small>
-      </aside>
-    </div>
   );
 }

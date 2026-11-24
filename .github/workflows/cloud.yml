@@ -24,6 +24,16 @@ jobs:
           cache-dependency-path: cloud/package-lock.json
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: npm ci
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-reception-workflow
+          path: cloud/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

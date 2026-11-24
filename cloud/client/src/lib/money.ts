@@ -64,6 +64,7 @@ export function calculateTotals(
     totalCents,
     paidCents,
     balanceCents: totalCents - paidCents,
+    overpaidCents: 0,
   };
 }
 export function formatMoney(cents: number): string {

@@ -7,7 +7,7 @@ await mkdir('dist/server',{recursive:true});await mkdir('dist/.openai',{recursiv
 const frontend=await build({entryPoints:['client/entry.tsx'],bundle:true,write:false,minify:true,format:'iife',platform:'browser',target:'es2022',jsx:'automatic',alias:{'@':path.resolve('client/src')}});
 const js=frontend.outputFiles[0].text;
 const css=await readFile('client/style.css','utf8');
-const html='<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Закрытая CRM автосервиса: клиенты, автомобили, заказы, осмотры и PDF"><title>Автосервис · CRM</title><link rel="stylesheet" href="/assets/app.css"></head><body><div id="root"></div><script src="/assets/app.js" defer></script></body></html>';
+const html='<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Закрытая CRM автосервиса: клиенты, автомобили, заказы, осмотры и PDF"><title>TOP-СЕРВИС · CRM</title><link rel="stylesheet" href="/assets/app.css"></head><body><div id="root"></div><script src="/assets/app.js" defer></script></body></html>';
 const regular=(await readFile('assets/DejaVuSans.ttf')).toString('base64');const bold=(await readFile('assets/DejaVuSans-Bold.ttf')).toString('base64');
 const entry=`import {createWorker} from ${JSON.stringify(path.join(root,'worker/index.ts'))};export default createWorker(${JSON.stringify({html,js,css,regular,bold})});`;
 await writeFile('.sites-runtime/entry.ts',entry);
