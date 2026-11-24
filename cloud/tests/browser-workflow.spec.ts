@@ -88,6 +88,7 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await page.getByRole("button", { name: "В заказ (1)" }).click();
   const works = page.locator(".line-section").filter({ has: page.getByRole("heading", { name: "Работы", exact: true }) });
   const parts = page.locator(".line-section").filter({ has: page.getByRole("heading", { name: "Запчасти", exact: true }) });
+  const oilWork = works.getByRole("group").filter({ has: page.getByRole("button", { name: "Удалить: Масло моторное", exact: true }) });
   await works.getByLabel("Решение клиента").selectOption("APPROVED");
   await parts.getByLabel("Источник детали").selectOption("CUSTOMER");
   await parts.getByLabel("Решение клиента").selectOption("APPROVED");
@@ -162,7 +163,7 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await other.getByLabel("Рекомендации клиенту").fill("Совет из второго окна");
   await expect(other.getByText("Все изменения сохранены")).toBeVisible();
   await page.getByRole("button", { name: "Повторить отправку" }).click();
-  await expect(page.locator(".total-balance")).toContainText(money(0));
+  await expect(page.locator(".total-balance strong")).toHaveText("0,00 ₽");
   await confirmSettlement();
   await page.getByRole("tab", { name: /^Осмотр/ }).click();
   await page.getByLabel("Примечание Масло моторное", {exact:true}).fill("Дополнение из первого окна");
@@ -190,7 +191,7 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await expect(page.getByRole("dialog", { name: /Акт выполненных работ/ })).toBeVisible();
   const revised = await readAct(page, info.outputPath("act-v2.pdf"));
   expect(revised).toContain("Контроль после выдачи");
-  expect(revised).toMatch(/Остаток долга.*0,00/);
+  expect(revised).toMatch(/Остаток долга[ \t]+0,00/);
   expect(revised).not.toContain("Замена ремня");
   await page.getByRole("dialog").getByRole("button", { name: "Закрыть окно" }).click();
   await page.locator(".document-row").filter({ hasText: "версия 1" }).getByRole("button", { name: "Просмотр" }).click();
@@ -208,9 +209,9 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await discount.fill("0");
   await page.getByRole("button", { name: "Сохранить скидку" }).click();
   await expect(page.locator(".total-final")).toContainText(money(2000));
-  await works.getByLabel("Решение клиента").first().selectOption("DEFERRED");
+  await oilWork.getByLabel("Решение клиента").selectOption("DEFERRED");
   await page.getByRole("button", { name: "Сохранить строки" }).click();
-  await expect(page.locator(".total-final")).toContainText(money(0));
+  await expect(page.locator(".total-final strong")).toHaveText("0,00 ₽");
   await expect(page.getByText(/Переплата.*1\s750,00/)).toBeVisible();
   expect(browserErrors).toEqual([]);
 });
