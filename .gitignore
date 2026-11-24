@@ -1,6 +1,8 @@
 node_modules/
 cloud/node_modules
 .superpowers/
+__pycache__/
+*.py[cod]
 .next/
 .env
 .env.*
