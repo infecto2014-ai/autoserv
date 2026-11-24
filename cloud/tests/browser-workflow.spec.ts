@@ -4,6 +4,52 @@ import { expect, test, type Page } from "@playwright/test";
 const money = (amount: number) => new RegExp(`${amount.toLocaleString("ru-RU").replace(/\s/g, "\\s")},00\\s*₽`);
 const orderDate = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kaliningrad" }).format();
 
+test("новая навигация работает с клавиатуры и сохраняет доступ к формам на разных экранах", async ({ page }, info) => {
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: /Долг клиентов/ })).toBeVisible();
+  await page.getByRole("button", { name: "Свернуть меню", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Развернуть меню", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Заказы", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Новый заказ", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Развернуть меню", exact: true }).click();
+  await page.getByRole("link", { name: "Обзор", exact: true }).click();
+  for (const width of [1440, 1024, 768, 390]) {
+    await page.setViewportSize({ width, height: 980 });
+    await expect(page.getByRole("heading", { name: "Обзор", exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`premium-overview-${width}.png`), fullPage: true, animations: "disabled" });
+  }
+  const menu = page.getByRole("button", { name: "Открыть меню", exact: true });
+  await menu.click();
+  const navigation = page.getByRole("dialog", { name: "Основная навигация" });
+  await expect(navigation.getByRole("link", { name: "Заказы", exact: true })).toBeVisible();
+  await expect(page.locator(".workspace")).toHaveAttribute("inert", "");
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeFocused();
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await menu.click();
+  await navigation.getByRole("link", { name: "Обзор", exact: true }).click();
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await menu.click();
+  await page.setViewportSize({ width: 1024, height: 980 });
+  await expect(page.locator(".workspace")).not.toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "Свернуть меню", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 980 });
+  await menu.click();
+  await navigation.getByRole("link", { name: "Заказы", exact: true }).click();
+  await page.getByRole("button", { name: "Новый заказ", exact: true }).click();
+  const intake = page.getByRole("dialog", { name: "Новый заказ", exact: true });
+  await expect(intake.getByLabel("Марка", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("premium-intake-mobile.png"), fullPage: true, animations: "disabled" });
+  await intake.getByRole("button", { name: "Закрыть окно", exact: true }).click();
+  await menu.click();
+  await navigation.getByRole("link", { name: "Клиенты и авто", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Клиенты и авто", exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("premium-directory-mobile.png"), fullPage: true, animations: "disabled" });
+});
+
 async function loseFirstResponse(page: Page, url: string, status: number) {
   const requests: unknown[] = [];
   await page.route(url, async (route) => {

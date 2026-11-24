@@ -1,6 +1,6 @@
 import {handleApi} from './api';
 import type {Env} from './types';
-interface Assets {html:string;js:string;css:string;regular:string;bold:string}
+interface Assets {html:string;js:string;css:string;regular:string;bold:string;garage?:string;golos?:string}
 const security={
  'x-content-type-options':'nosniff',
  'referrer-policy':'same-origin',
@@ -17,6 +17,8 @@ export function createWorker(assets:Assets){
    response=await handleApi(request,env,fonts);
   }else if(path==='/assets/app.js')response=new Response(assets.js,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-cache'}});
   else if(path==='/assets/app.css')response=new Response(assets.css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'no-cache'}});
+  else if(path==='/assets/garage.webp' && assets.garage)response=new Response(decode(assets.garage),{headers:{'content-type':'image/webp','cache-control':'public, max-age=86400'}});
+  else if(path==='/assets/golos.ttf' && assets.golos)response=new Response(decode(assets.golos),{headers:{'content-type':'font/ttf','cache-control':'public, max-age=86400'}});
   else if(path==='/'||path==='/index.html')response=new Response(assets.html,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
   else response=new Response('Не найдено',{status:404});
   const headers=new Headers(response.headers);for(const[k,v]of Object.entries(security))headers.set(k,v);

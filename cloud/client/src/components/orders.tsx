@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ClipboardList, UserRound, Car, Wrench, Plus } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { ClipboardList, UserRound, Car, Wrench, Plus, CircleCheck, Coins, Wallet, Layers3, CircleDollarSign, ChartNoAxesCombined } from "lucide-react";
 import type { Actor, OrderDetail, PageResult } from "@/lib/types";
 import { api, date, statuses } from "@/lib/client";
 import { formatMoney } from "@/lib/money";
@@ -14,12 +14,12 @@ const groups = [
   ["active", "Активные заказы", ClipboardList],
   ["approval", "На согласовании", UserRound],
   ["ready", "Готовы к выдаче", Car],
-  ["completed", "Завершено", Wrench],
+  ["completed", "Завершено", CircleCheck],
 ] as const;
 
 export function Overview({ user }: { user: Actor }) {
   return user.role === "MASTER"
-    ? <section className="panel pad"><a href="#orders">Открыть назначенные заказы</a></section>
+    ? <section className="panel pad"><h1>Обзор</h1><a href="#orders">Открыть назначенные заказы</a></section>
     : <OverviewMetrics />;
 }
 function OverviewMetrics() {
@@ -41,42 +41,74 @@ function OverviewMetrics() {
     });
     return () => { live = false; clearTimeout(timer); };
   }, [query, retry]);
-  return <>
-    <section className="panel pad">
-      <PeriodFilter value={period} onChange={setPeriod} />
+  return <div className="overview-page">
+    <section className="overview-hero" aria-labelledby="overview-title">
+      <div className="overview-intro">
+        <span className="eyebrow">ТОП-СЕРВИС · РАБОЧЕЕ ПРОСТРАНСТВО</span>
+        <h1 id="overview-title">Обзор</h1>
+        <p>Панель управления автосервисом</p>
+        <div className="overview-period"><PeriodFilter value={period} onChange={setPeriod} /></div>
+      </div>
     </section>
     {error && <Notice>{error} <button className="secondary" onClick={() => refresh((n) => n + 1)}>Повторить</button></Notice>}
-    {busy && <p role="status">Загружаем обзор…</p>}
+    {busy && <div className="overview-skeleton" role="status" aria-label="Загружаем обзор…"><div className="stats" aria-hidden="true">{Array.from({length:8}, (_,i) => <div className="stat skeleton" key={i}><span/><strong/><small/></div>)}</div></div>}
     {!busy && value && <>
       <div className="stats">
-        {groups.map(([key, label, Icon]) => (
-          <div className="stat" key={key}>
-            <div><span>{label}</span><Icon size={20} aria-hidden="true" /></div>
-            <strong>{value.counts[key]}</strong>
-            <small>{key === "completed" ? "За период" : "Сейчас"}</small>
+        {groups.map(([key, label, Icon], index) => (
+          <div className="stat" data-tone={["cyan", "blue", "orange", "green"][index]} key={key}>
+            <span className="stat-icon"><Icon size={25} aria-hidden="true" /></span>
+            <div className="stat-copy"><span>{label}</span>
+              <strong key={value.counts[key]}>{value.counts[key]}</strong>
+              <small>{key === "completed" ? "За выбранный период" : "Сейчас"}</small>
+            </div>
           </div>
         ))}
       </div>
       <div className="stats">
         {([
-          ["laborCents", "Получено за работы"],
-          ["partsCents", "Получено за детали"],
-          ["totalCents", "Получено всего"],
-        ] as const).map(([key, label]) => (
-          <div className="stat" key={key}>
-            <div><span>{label}</span></div><strong>{formatMoney(value.money[key])}</strong>
+          ["laborCents", "Получено за работы", Wrench, "cyan"],
+          ["partsCents", "Получено за детали", Layers3, "orange"],
+          ["totalCents", "Получено всего", Wallet, "green"],
+        ] as const).map(([key, label, Icon, tone]) => (
+          <div className="stat" data-tone={tone} key={key}>
+            <span className="stat-icon"><Icon size={25} aria-hidden="true" /></span>
+            <div className="stat-copy"><span>{label}</span><strong key={value.money[key]}>{formatMoney(value.money[key])}</strong>
             <small>{key === "totalCents" && value.money.unallocatedCents !== 0
               ? `В том числе не распределено ${formatMoney(value.money.unallocatedCents)}`
-              : "За период"}</small>
+              : "За выбранный период"}</small></div>
           </div>
         ))}
-        <a className="stat" href="#orders?debtOnly=1">
-          <div><span>Долг клиентов</span></div>
-          <strong>{formatMoney(value.money.debtCents)}</strong><small>Сейчас · Должники</small>
+        <a className="stat" data-tone="orange" href="#orders?debtOnly=1">
+          <span className="stat-icon"><CircleDollarSign size={25} aria-hidden="true" /></span>
+          <div className="stat-copy"><span>Долг клиентов</span>
+          <strong key={value.money.debtCents}>{formatMoney(value.money.debtCents)}</strong><small>Сейчас · Открыть должников</small></div>
         </a>
       </div>
+      <Revenue money={value.money} />
     </>}
-  </>;
+  </div>;
+}
+
+function Revenue({money}: {money: OverviewData["money"]}) {
+  const chartable = money.totalCents > 0 && [money.laborCents, money.partsCents, money.unallocatedCents].every(v => v >= 0);
+  const share = (value: number) => chartable ? value / money.totalCents * 100 : 0;
+  const ringStyle = {"--labor-share": `${share(money.laborCents)}%`, "--parts-share": `${share(money.laborCents + money.partsCents)}%`} as CSSProperties;
+  return <section className="panel revenue-panel" aria-labelledby="revenue-heading">
+    <div className="panel-heading"><h2 id="revenue-heading"><ChartNoAxesCombined size={21} aria-hidden="true" /> Структура поступлений</h2><span className="muted">За выбранный период</span></div>
+    <div className="revenue-layout">
+      <div className={`revenue-ring${chartable ? "" : " is-empty"}`} style={ringStyle} aria-hidden="true"><div className="revenue-total"><Coins size={23}/><strong>{formatMoney(money.totalCents)}</strong><small>Получено всего</small></div></div>
+      <div className="revenue-legend">
+        <div data-tone="cyan"><span>Работы</span><strong>{formatMoney(money.laborCents)}</strong></div>
+        <div data-tone="orange"><span>Запчасти и детали</span><strong>{formatMoney(money.partsCents)}</strong></div>
+        {money.unallocatedCents !== 0 && <div><span>Пока не распределено</span><strong>{formatMoney(money.unallocatedCents)}</strong></div>}
+        <div className="revenue-sum"><span>Всего поступило</span><strong>{formatMoney(money.totalCents)}</strong></div>
+        <p>{chartable ? "Фактические поступления с учётом возвратов. Долги в эту сумму не входят."
+          : money.totalCents === 0 && [money.laborCents, money.partsCents, money.unallocatedCents].every(v => v === 0)
+            ? "Чистые поступления за выбранный период равны нулю. Возвраты учтены в итоговой сумме."
+            : "За период есть возвраты. Суммы показаны с учётом возвратов; круговая диаграмма недоступна."}</p>
+      </div>
+    </div>
+  </section>;
 }
 
 export function Orders({ user, query }: { user: Actor; query: string }) {
