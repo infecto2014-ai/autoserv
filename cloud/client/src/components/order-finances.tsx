@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { OrderDetail, OrderLine, Payment } from "@/lib/types";
-import { ApiError, date } from "@/lib/client";
+import { isVersionConflict, date } from "@/lib/client";
 import { formatMoney, formatQuantity, parseMoney } from "@/lib/money";
 import { useRetryableWrite } from "@/lib/workflow";
 import { NumberField } from "./number-field";
@@ -25,6 +25,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
   onDraft: (value: boolean) => void; mutate: Mutate;
   onPayment: (order: OrderDetail) => void; onBusy: (value: boolean) => void; onConflict: (message: string) => void;
 }) {
+  const base = useRef<number | null>(null);
   const [draft, setDraft] = useState<Draft>(null);
   const [changes, setChanges] = useState<Row[]>([]);
   const [revision, reset] = useState(0);
@@ -34,6 +35,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
   const { totals, legacySnapshot } = order;
   const legacy = order.financialMode === "LEGACY";
   function mark(value: Draft) {
+    base.current = value === null ? null : base.current ?? order.version;
     setDraft(value);
     onDraft(value !== null);
   }
@@ -57,7 +59,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
       const lines = current.map(({ id, kind, name, quantityMilli, unitPriceCents, variant, article, approval, completed, partSource }) => ({
         id, kind, name, quantityMilli, unitPriceCents, variant, article, approval, completed, partSource,
       }));
-      await mutate("/lines", "PUT", { lines });
+      await mutate("/lines", "PUT", { lines, version: base.current });
       discard();
     } catch (err) { setError((err as Error).message); }
   }
@@ -65,7 +67,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
     e.preventDefault();
     setError("");
     try {
-      await mutate("", "PATCH", { discountCents: discount });
+      await mutate("", "PATCH", { discountCents: discount, version: base.current });
       discard();
     } catch (err) { setError((err as Error).message); }
   }
@@ -87,7 +89,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
   return <>
     <div className="financial-layout">
       {legacy ? <LegacyReview order={order} disabled={disabled || (draft !== null && draft !== "review")}
-        onDraft={(active) => mark(active ? "review" : null)} save={(body) => mutate("/review-finances", "POST", body)} />
+        onDraft={(active) => mark(active ? "review" : null)} save={(body) => mutate("/review-finances", "POST", { ...body, version: base.current })} />
         : <form className="panel" key={revision} onSubmit={saveRows} onChangeCapture={() => {
           // Retain the draft even while an input contains an incomplete value.
           if (draft === null) updateRows((existing) => existing);
@@ -137,7 +139,7 @@ export function OrderFinances({ order, master, disabled, onDraft, mutate, onPaym
         <dl><div><dt>Оплачено</dt><dd>{formatMoney(totals.paidCents)}</dd></div></dl>
         <div className="total-balance"><span>Долг</span><strong>{formatMoney(totals.balanceCents)}</strong></div>
         {totals.totalCents > 0 && totals.balanceCents === 0 && <p className="paid-label">Оплачено полностью</p>}
-        {totals.overpaidCents > 0 && <p>{totals.totalCents === 0 ? "Получено авансом" : "Переплата"} · {formatMoney(totals.overpaidCents)}</p>}
+        {totals.overpaidCents > 0 && <p>{totals.totalCents === 0 && order.status !== "DELIVERED" ? "Получено авансом" : "Переплата"} · {formatMoney(totals.overpaidCents)}</p>}
         {!legacy && <small>Итог включает сохранённые согласованные{order.status === "DELIVERED" ? " и выполненные" : ""} позиции. Отложенные и детали клиента не входят в оплату.</small>}
         {!legacy && legacySnapshot && <details>
           <summary>Перенесённый расчёт</summary>
@@ -276,12 +278,14 @@ function PaymentForm({ kind, order, sources, refundAmounts, cancel, saved, onBus
   cancel: () => void; saved: (order: OrderDetail) => void;
   onBusy: (value: boolean) => void; onConflict: (message: string) => void;
 }) {
+  const [version] = useState(order.version);
   const [amount, setAmount] = useState("");
   const [source, setSource] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const write = useRetryableWrite<OrderDetail>();
+  const [conflict, setConflict] = useState(false);
   const refund = kind === "REFUND";
   function close() {
     if (busy || write.uncertain) return;
@@ -296,14 +300,14 @@ function PaymentForm({ kind, order, sources, refundAmounts, cancel, saved, onBus
       const amountCents = parseMoney(amount);
       if (!amountCents) throw new Error("Укажите сумму больше нуля.");
       const updated = await write.send(`/orders/${order.id}/payments`, {
-        version: order.version, amountCents, kind,
+        version, amountCents, kind,
         ...(refund ? { relatedPaymentId: source, reason: reason.trim() } : {}),
       });
       saved(updated);
     } catch (err) {
       const message = (err as Error).message;
       setError(message);
-      if (err instanceof ApiError && err.status === 409 && /заказ изменён|обновите данные/i.test(message)) onConflict(message);
+      if (isVersionConflict(err)) { setConflict(true); onConflict(message); }
     } finally {
       onBusy(false);
       setBusy(false);
@@ -322,7 +326,7 @@ function PaymentForm({ kind, order, sources, refundAmounts, cancel, saved, onBus
       </fieldset>
       <div className="form-footer">
         <button type="button" className="secondary" disabled={busy || write.uncertain} onClick={close}>Отмена</button>
-        <button className="primary" disabled={busy}>{busy ? "Сохраняем…" : write.uncertain ? "Повторить отправку" : refund ? "Записать возврат" : "Записать оплату"}</button>
+        <button className="primary" disabled={busy || conflict}>{busy ? "Сохраняем…" : write.uncertain ? "Повторить отправку" : refund ? "Записать возврат" : "Записать оплату"}</button>
       </div>
     </form>
   </Modal>;

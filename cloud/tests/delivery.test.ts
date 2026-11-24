@@ -128,7 +128,7 @@ it('открывает прежний заказ-наряд до сверки и
   expect(await pdf(oldMeta)).toContain('ЗАКАЗ-НАРЯД');
   await api('orders/o/deliver','POST',{requestId:'deliver',version:order.version,includeRecommendations:false},409);
   await api('orders/o/documents','POST',{kind:'WORK_ORDER',version:order.version},409);
-  const reviewed = await api('orders/o/review-finances','POST',{version:order.version,decisions:[{id:'work',approval:'APPROVED',completed:true}]});
+  const reviewed = await api('orders/o/review-finances','POST',{version:order.version,discountCents:0,decisions:[{id:'work',approval:'APPROVED',completed:true}]});
   const result = await api<Delivery>('orders/o/deliver','POST',{requestId:'deliver',version:reviewed.version,includeRecommendations:false});
   expect(result.document).toMatchObject({version:2,templateVersion:'completion-act-1.0'});
   expect(result.order.documents).toHaveLength(2);
@@ -187,4 +187,17 @@ it.each(['новый','предыдущий'])('сравнивает тольк�
   expect(order.documents).toEqual([delivery.document]);
   expect(saved(delivery.document.id)).toBe(original);
   expect(await pdf(delivery.document)).toBe(text);
+});
+
+it('формирует новый акт и сессию по калининградскому времени при старой настройке UTC', async () => {
+  let order = await intake();
+  db.sqlite.exec("UPDATE ServiceSettings SET timezone='UTC'; UPDATE WorkOrder SET openedAt='2026-10-31T22:00:00Z'");
+  expect(await api('auth/session')).toMatchObject({timezone:'Europe/Kaliningrad'});
+  expect(await api('settings')).toMatchObject({timezone:'Europe/Kaliningrad'});
+  await api('settings','PATCH',{timezone:'UTC'},422);
+  const path = 'orders/'+order.id;
+  order = await api(path,'PATCH',{version:order.version,status:'READY'});
+  const {document} = await api<Delivery>(path+'/deliver','POST',{requestId:'local-day',version:order.version,includeRecommendations:false});
+  expect(JSON.parse(saved(document.id)).settings.timezone).toBe('Europe/Kaliningrad');
+  expect(await pdf(document)).toMatch(/Открыт: 01\.11\.2026,? 00:00/);
 });

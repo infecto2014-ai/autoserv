@@ -1,9 +1,12 @@
 import type { Actor, Role } from './types';
 
 export class HttpError extends Error {
-  constructor(public readonly status: number, message: string) { super(message); this.name = 'HttpError'; }
+  constructor(public readonly status: number, message: string, public readonly code?: 'VERSION_CONFLICT' | 'IDEMPOTENCY_MISMATCH') { super(message); this.name = 'HttpError'; }
 }
 export function fail(status: number, message: string): never { throw new HttpError(status, message); }
+export function versionConflict(): never {
+  throw new HttpError(409, 'Данные изменились. Загрузите актуальную версию.', 'VERSION_CONFLICT');
+}
 export function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }

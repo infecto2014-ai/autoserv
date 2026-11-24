@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { first, stmt } from './db';
-import { fail, json } from './common';
+import { HttpError, json } from './common';
 import { loadOrder } from './orders';
 import type { OrderDetail } from '../shared/types';
 import type { Context, D1PreparedStatement } from './types';
@@ -18,7 +18,7 @@ export async function withRequest(ctx: Context, operation: string, requestId: st
     const row = await first<{orderId: string; resultId: string; payloadHash: string}>(ctx.env.DB,
       'SELECT orderId,resultId,payloadHash FROM WorkflowRequest WHERE actorId=? AND operation=? AND requestId=?', key);
     if (!row) return null;
-    if (row.payloadHash !== hash) fail(409, 'Этот ключ уже использован для другого запроса');
+    if (row.payloadHash !== hash) throw new HttpError(409, 'Этот ключ уже использован для другого запроса', 'IDEMPOTENCY_MISMATCH');
     return json(result(await loadOrder(ctx, row.orderId), row.resultId));
   };
   const existing = await replay();

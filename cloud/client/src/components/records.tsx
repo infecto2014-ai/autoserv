@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { Actor, Customer, Vehicle, Settings, CatalogItem, PageResult } from "@/lib/types";
-import { api, configureTimezone } from "@/lib/client";
+import { api, isVersionConflict } from "@/lib/client";
 import { formatMoney, parseMoney } from "@/lib/money";
 import { useDraftGuard } from "@/lib/workflow";
 import { Empty, Field, Modal, Notice, Pagination } from "./ui";
@@ -77,7 +77,7 @@ function CatalogForm({ item, close, saved }: { item: CatalogItem | null; close: 
   </EditModal>;
 }
 
-export function RecordForm({ item, close, saved }: { item: Customer | Vehicle; close: () => void; saved: () => void }) {
+export function RecordForm({ item, close, saved, reload }: { item: Customer | Vehicle; reload: (fresh: Customer | Vehicle) => void; close: () => void; saved: () => void }) {
   const [people, setPeople] = useState<Customer[]>([]);
   const [q, setQ] = useState("");
   const [owner, setOwner] = useState("make" in item ? item.customer ?? null : null);
@@ -96,17 +96,25 @@ export function RecordForm({ item, close, saved }: { item: Customer | Vehicle; c
     return () => { live = false; clearTimeout(timeout); };
   }, [car, q]);
   return <EditModal title={car ? "Редактировать автомобиль" : "Редактировать клиента"} close={close}
+    reload={async () => reload(await api<Customer | Vehicle>(`/${car ? "vehicles" : "customers"}/${item.id}`))}
     save={async (data) => {
-      const { archived, ...fields } = data;
-      const archiveChanged = (archived === "on") !== !!item.archivedAt;
-      const patch: Record<string, unknown> = { ...fields, ...(archiveChanged ? { archived: archived === "on" } : {}) };
+      const originals: Record<string, unknown> = { ...item, archived: !!item.archivedAt };
+      const fields: Record<string, unknown> = { ...data, archived: data.archived === "on" };
       if (car) {
-        patch.mileage = Number(fields.mileage);
-        patch.year = fields.year ? Number(fields.year) : null;
-        if (!String(fields.model).trim() && !car.model) delete patch.model;
-        if (owner && owner.id !== car.customerId) patch.customerId = owner.id;
-      } else if (!String(fields.name).trim() && !customer?.name) delete patch.name;
-      await api(`/${car ? "vehicles" : "customers"}/${item.id}`, "PATCH", patch);
+        fields.mileage = Number(data.mileage);
+        fields.year = data.year ? Number(data.year) : null;
+        fields.customerId = owner?.id ?? car.customerId;
+      }
+      const changes: Record<string, unknown> = {};
+      const expected: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(fields)) {
+        // Null text fields and empty strings have the same representation in the form.
+        if (String(value ?? "") === String(originals[key] ?? "")) continue;
+        changes[key] = value;
+        expected[key] = originals[key];
+      }
+      if (Object.keys(changes).length)
+        await api(`/${car ? "vehicles" : "customers"}/${item.id}`, "PATCH", { ...changes, expected });
       saved();
     }}>
     {car ? <>
@@ -138,12 +146,14 @@ export function RecordForm({ item, close, saved }: { item: Customer | Vehicle; c
   </EditModal>;
 }
 
-function EditModal({ title, close, save, children }: {
+function EditModal({ title, close, save, reload, children }: {
+  reload?: () => Promise<void>;
   title: string; close: () => void; save: (data: Record<string, FormDataEntryValue>) => Promise<void>; children: React.ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
   useDraftGuard(busy || dirty, setError);
   function cancel() {
     if (!busy && (!dirty || confirm("Закрыть форму и сбросить правки?"))) close();
@@ -153,16 +163,21 @@ function EditModal({ title, close, save, children }: {
     setBusy(true);
     setError("");
     try { await save(Object.fromEntries(new FormData(e.currentTarget))); }
-    catch (err) { setError((err as Error).message); }
+    catch (err) { setError((err as Error).message); setConflict(isVersionConflict(err)); }
     finally { setBusy(false); }
   }
   return <Modal title={title} close={cancel}>
     <form onSubmit={submit} onChange={() => setDirty(true)}>
       {error && <Notice>{error}</Notice>}
+      {conflict && reload && <button type="button" className="secondary" disabled={busy} onClick={async () => {
+        if (!confirm("Заменить введённые значения актуальной карточкой?")) return;
+        setBusy(true);
+        try { await reload(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+      }}>Загрузить актуальную карточку</button>}
       <fieldset disabled={busy} className="form-fields">{children}</fieldset>
       <div className="form-footer">
         <button className="secondary" type="button" disabled={busy} onClick={cancel}>Отмена</button>
-        <button className="primary" disabled={busy || !dirty}>{busy ? "Сохраняем…" : "Сохранить"}</button>
+        <button className="primary" disabled={busy || !dirty || conflict}>{busy ? "Сохраняем…" : "Сохранить"}</button>
       </div>
     </form>
   </Modal>;
@@ -187,7 +202,6 @@ export function AdminSettings() {
         "PATCH",
         Object.fromEntries(new FormData(e.currentTarget)),
       );
-      configureTimezone(settings.timezone);
       setValue(settings);
       setSuccess(true);
       setError("");
@@ -224,6 +238,7 @@ export function AdminSettings() {
               <Field key={key} label={label}>
                 <input
                   name={key}
+                  readOnly={key === "timezone"}
                   required={key === "name" || key === "timezone"}
                   defaultValue={value[key as keyof Settings]}
                 />

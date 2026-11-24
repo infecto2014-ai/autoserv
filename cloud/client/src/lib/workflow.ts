@@ -17,7 +17,7 @@ export function useRetryableWrite<T>() {
       return result;
     } catch (error) {
       const definitive = error instanceof ApiError && error.status < 500;
-      if (definitive) attempt.current = null;
+      if (definitive && error.code !== "IDEMPOTENCY_MISMATCH") attempt.current = null;
       setUncertain(!definitive);
       throw error;
     } finally {

@@ -22,7 +22,7 @@ import type {
   DocumentMeta,
   PartVariant,
 } from "@/lib/types";
-import { api, ApiError, conditions, date, statuses } from "@/lib/client";
+import { api, isVersionConflict, conditions, date, statuses } from "@/lib/client";
 import { useDraftGuard } from "@/lib/workflow";
 import { NumberField } from "./number-field";
 import { OrderFinances } from "./order-finances";
@@ -40,6 +40,7 @@ function validInspection() {
 }
 export function OrderEditor({ id, user }: { id: string; user: Actor }) {
   const [order, setOrder] = useState<OrderDetail | null>(null),
+    [inspectionInstance, resetInspection] = useState(0),
     [items, setItems] = useState<InspectionItem[]>([]),
     [recommendations, setRecommendations] = useState(""),
     [tab, setTab] = useState("inspection"),
@@ -62,6 +63,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
   const reportDraft = useCallback(() => setError("Сохраните или отмените изменения перед переходом."), []);
   useDraftGuard(dirty || financeDraft || busy, reportDraft);
   const version = useRef(0),
+    inspectionBase = useRef<number | null>(null),
     editRevision = useRef(0),
     saving = useRef(false),
     draft = useRef({ items, recommendations });
@@ -72,25 +74,37 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     locked = !!order && order.status === "CANCELLED",
     editable = !locked && !conflict && !busy;
   const accept = useCallback((o: OrderDetail) => {
+    if (inspectionBase.current !== null) {
+      setConflict(true);
+      setSaveStatus("Не сохранено");
+      return;
+    }
+    if (o.version > version.current + 1) resetInspection(n => n + 1);
     version.current = o.version;
     setOrder(o);
+    draft.current = {items:o.inspectionItems, recommendations:o.recommendations};
+    setItems(o.inspectionItems);
+    setRecommendations(o.recommendations);
   }, []);
   const load = useCallback(async () => {
+    setBusy(true);
     try {
       const o = await api<OrderDetail>(`/orders/${id}`);
+      inspectionBase.current = null;
       accept(o);
-      setItems(o.inspectionItems);
-      setRecommendations(o.recommendations);
       setDirty(false);
       setConflict(false);
       setError("");
       setSaveStatus("Сохранено");
       setSelected([]);
       setFinanceDraft(false);
+      setDetails(false);
+      setAct(null);
       resetFinance((n) => n + 1);
+      resetInspection(n => n + 1);
     } catch (e) {
       setError((e as Error).message);
-    }
+    } finally { setBusy(false); }
   }, [id, accept]);
   useEffect(() => {
     queueMicrotask(() => void load());
@@ -101,13 +115,15 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
       .catch((err) => setStaffError(err.message));
   }, [load]);
   function edited() {
+    inspectionBase.current ??= version.current;
     editRevision.current += 1;
     setRevision(editRevision.current);
     setDirty(true);
     setSaveStatus("Есть несохранённые изменения");
   }
   const save = useCallback(async () => {
-    if (saving.current) return false;
+    const base = inspectionBase.current;
+    if (saving.current || base === null) return false;
     if (!validInspection()) {
       setSaveStatus("Исправьте значение поля");
       setError("Исправьте отмеченное значение перед сохранением.");
@@ -118,21 +134,32 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     const stamp = editRevision.current;
     try {
       const o = await api<OrderDetail>(`/orders/${id}/inspection`, "PUT", {
-        version: version.current,
+        version: base,
         ...draft.current,
       });
-      accept(o);
       if (stamp === editRevision.current) {
+        inspectionBase.current = null;
+        accept(o);
         setDirty(false);
         setSaveStatus("Все изменения сохранены");
-      } else setSaveStatus("Сохраняем новые изменения…");
+      } else if (o.version === base + 1) {
+        // Only our acknowledged save advanced the version. Keep subsequent keystrokes.
+        inspectionBase.current = o.version;
+        version.current = o.version;
+        setOrder(o);
+        setSaveStatus("Сохраняем новые изменения…");
+      } else {
+        // Another writer committed between our save and its response snapshot.
+        setConflict(true);
+        setSaveStatus("Не сохранено");
+        return false;
+      }
       setError("");
       return true;
     } catch (e) {
-      const err = e as ApiError;
-      setError(err.message);
+      setError((e as Error).message);
       setSaveStatus("Не сохранено");
-      if (err.status === 409) setConflict(true);
+      if (isVersionConflict(e)) setConflict(true);
       return false;
     } finally {
       saving.current = false;
@@ -156,7 +183,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
       return await operation();
     } catch (err) {
       setError((err as Error).message);
-      if (err instanceof ApiError && err.status === 409 && /заказ изменён|обновите данные/i.test(err.message)) setConflict(true);
+      if (isVersionConflict(err)) setConflict(true);
       throw err;
     } finally {
       setBusy(false);
@@ -194,7 +221,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
     } catch { /* The editor reports the failure and keeps the current draft. */ }
   }
   function chooseTab(key: string) {
-    if (key === tab) return;
+    if (key === tab || busy) return;
     if (financeDraft || dirty || saving.current) {
       setError("Сохраните или отмените изменения перед переходом.");
       return;
@@ -339,6 +366,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
           Скопируйте нужные значения перед загрузкой актуальной версии.{" "}
           <button
             className="secondary"
+            disabled={busy}
             onClick={() => {
               if (
                 confirm(
@@ -383,7 +411,7 @@ export function OrderEditor({ id, user }: { id: string; user: Actor }) {
         ))}
       </div>
       {tab === "inspection" ? (
-        <section className="panel inspection-panel">
+        <section key={inspectionInstance} className="panel inspection-panel">
           <div className="panel-heading">
             <div>
               <h2>Акт осмотра автомобиля</h2>

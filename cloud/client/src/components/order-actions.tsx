@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { DocumentMeta, OrderDetail } from "@/lib/types";
-import { api, ApiError } from "@/lib/client";
+import { api, isVersionConflict } from "@/lib/client";
 import { formatMoney, formatQuantity } from "@/lib/money";
 import { useDraftGuard, useRetryableWrite } from "@/lib/workflow";
 import { calculateWorkflowTotals } from "../../../shared/workflow-money";
@@ -16,6 +16,7 @@ export function ActForm({ mode, order, close, saved, onDraft, onConflict }: {
   saved: (doc: DocumentMeta, order: OrderDetail | null, warning?: string) => void;
   onDraft: (value: boolean) => void; onConflict: (message: string) => void;
 }) {
+  const [version] = useState(order.version);
   const [includeRecommendations, setInclude] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
@@ -47,7 +48,7 @@ export function ActForm({ mode, order, close, saved, onDraft, onConflict }: {
     onDraft(true);
     try {
       const path = `/orders/${order.id}`;
-      const body = { version: order.version, includeRecommendations };
+      const body = { version, includeRecommendations };
       if (deliver) {
         const result = await write.send(path + "/deliver", body);
         saved(result.document, result.order);
@@ -60,7 +61,7 @@ export function ActForm({ mode, order, close, saved, onDraft, onConflict }: {
     } catch (err) {
       const message = (err as Error).message;
       setError(message);
-      if (err instanceof ApiError && err.status === 409 && /заказ изменён|обновите данные/i.test(message)) {
+      if (isVersionConflict(err)) {
         setConflict(true);
         onConflict(message);
       }
@@ -77,6 +78,7 @@ export function ActForm({ mode, order, close, saved, onDraft, onConflict }: {
         {line.name} · {formatQuantity(line.quantityMilli)}{line.partSource === "CUSTOMER" && " · Деталь клиента"}
       </li>)}</ul> : <Empty>Выполненных позиций нет.</Empty>}
       <dl className="act-totals">
+        <div><dt>Скидка на работы</dt><dd>{formatMoney(amount.discountCents)}</dd></div>
         <div><dt>Итого</dt><dd>{formatMoney(amount.totalCents)}</dd></div>
         <div><dt>Оплачено</dt><dd>{formatMoney(amount.paidCents)}</dd></div>
         <div><dt>Долг</dt><dd>{formatMoney(amount.balanceCents)}</dd></div>
@@ -99,6 +101,7 @@ export function ActForm({ mode, order, close, saved, onDraft, onConflict }: {
 export function OrderDetailsForm({ order, close, save }: {
   order: OrderDetail; close: () => void; save: (values: Record<string, unknown>) => Promise<OrderDetail>;
 }) {
+  const [version] = useState(order.version);
   const [complaint, setComplaint] = useState(order.complaint);
   const [comment, setComment] = useState(order.comment);
   const [busy, setBusy] = useState(false);
@@ -111,7 +114,7 @@ export function OrderDetailsForm({ order, close, save }: {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    try { await save({ complaint, comment }); close(); }
+    try { await save({ version, complaint, comment }); close(); }
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }

@@ -1,4 +1,4 @@
-import { fail } from './common';
+import { versionConflict } from './common';
 import type { D1Database, D1PreparedStatement, D1Result } from './types';
 export function stmt(db: D1Database, sql: string, args: unknown[] = []): D1PreparedStatement { return db.prepare(sql).bind(...args); }
 export async function all<T>(db: D1Database, sql: string, args: unknown[] = []): Promise<T[]> { return (await stmt(db, sql, args).all<T>()).results; }
@@ -18,7 +18,7 @@ export async function guarded(db: D1Database, conditionSQL: string, conditionArg
     ]);
   } catch (error) {
     const detail = error instanceof Error ? error.message + ' ' + String(error.cause ?? '') : String(error);
-    if (/mutation_guard/i.test(detail)) fail(409, 'Данные изменились. Обновите страницу и повторите действие');
+    if (/mutation_guard/i.test(detail)) versionConflict();
     throw error;
   }
 }

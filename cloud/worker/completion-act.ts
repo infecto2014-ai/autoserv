@@ -1,3 +1,4 @@
+import {serviceTimezone} from '../shared/service-time';
 import type {OrderDetail, Settings} from '../shared/types';
 import type {DocumentSnapshot} from './document-types';
 
@@ -9,8 +10,8 @@ export function customerAndVehicle(order: OrderDetail) {
   return {customer:{name, phone}, vehicle:{make, model, year, vin, plate}, masterName:order.master?.name ?? ''};
 }
 
-export function serviceDetails({name,address,phone,taxId,timezone}: Settings) {
-  return {name,address,phone,taxId,timezone};
+export function serviceDetails({name,address,phone,taxId}: Settings) {
+  return {name,address,phone,taxId,timezone:serviceTimezone};
 }
 
 export function completionContent(order: OrderDetail, settings: Settings, includeRecommendations: boolean) {

@@ -24,6 +24,7 @@ export function Directory({ user }: { user: Actor }) {
   const [revision, refresh] = useState(0);
   const [history, setHistory] = useState<{ kind: DirectoryKind; item: RecordItem } | null>(null);
   const [edit, setEdit] = useState<RecordItem | null>(null);
+  const [editRevision, resetEdit] = useState(0);
   const [saved, setSaved] = useState(false);
   const dates = periodQuery(period).toString();
   useEffect(() => {
@@ -78,7 +79,7 @@ export function Directory({ user }: { user: Actor }) {
     </>}
     {history && <History key={history.item.id} {...history} dates={dates} money={user.role !== "MASTER"}
       close={() => setHistory(null)} openVehicle={(item) => setHistory({ kind: "vehicles", item })} />}
-    {edit && <RecordForm item={edit} close={() => setEdit(null)} saved={() => { setEdit(null); setSaved(true); refresh((n) => n + 1); }} />}
+    {edit && <RecordForm key={editRevision} item={edit} reload={(fresh) => { setEdit(fresh); resetEdit(n => n + 1); }} close={() => setEdit(null)} saved={() => { setEdit(null); setSaved(true); refresh((n) => n + 1); }} />}
   </section>;
 }
 
@@ -122,6 +123,7 @@ export function Masters() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [editRevision, resetEdit] = useState(0);
   const [saved, setSaved] = useState("");
   const [retry, refresh] = useState(0);
   useEffect(() => {

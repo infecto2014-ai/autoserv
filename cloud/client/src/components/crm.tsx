@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpRight, BookOpen, Car, ClipboardList, LayoutDashboard, LogOut, Settings as SettingsIcon, UserRound, Wrench, Menu } from "lucide-react";
 import type { Actor } from "@/lib/types";
-import { api, configureTimezone, today, roles } from "@/lib/client";
+import { api, today, roles } from "@/lib/client";
 import { Notice } from "./ui";
 import { Catalog, AdminSettings } from "./records";
 import { Directory, Masters } from "./directory";
@@ -36,7 +36,6 @@ export function CRM() {
   useEffect(() => {
     api<{ user: Actor | null; timezone?: string }>("/auth/session")
       .then((v) => {
-        configureTimezone(v.timezone || "Europe/Kaliningrad");
         setUser(v.user);
       })
       .catch((e) => setError(e.message))

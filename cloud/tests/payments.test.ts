@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, expect, it} from 'vitest';
+import {afterRead} from './after-read';
 import {handleApi} from '../worker/api';
 import {SQLiteD1} from './sqlite-adapter';
 import type {OrderDetail} from '../shared/types';
@@ -50,7 +51,7 @@ it('continues a legacy balance and reviews actual lines without inventing a hist
     INSERT INTO Vehicle(id,customerId,make,model) VALUES ('v','c','Лада','');
     INSERT INTO WorkOrder(id,number,customerId,vehicleId,mileage,complaint,paidCents,status,closedAt,openedAt)
       VALUES('o','1','c','v',0,'Осмотр',400000,'DELIVERED','2024-01-01T12:00:00.000Z','2023-12-01T00:00:00.000Z');
-    INSERT INTO OrderLine(id,orderId,kind,name,unitPriceCents) VALUES('l','o','LABOR','Ремонт',1000000);`);
+    INSERT INTO OrderLine(id,orderId,kind,name,unitPriceCents) VALUES('l','o','LABOR','Ремонт',900000),('p','o','PART','Фильтр',100000);`);
   db.migrate();
   const old = await api('orders/o');
   expect(old.totals.balanceCents).toBe(600000);
@@ -58,16 +59,23 @@ it('continues a legacy balance and reviews actual lines without inventing a hist
   expect(await api('orders?debtOnly=1')).toMatchObject({total:1,items:[{id:'o',totals:{balanceCents:600000}}]});
   await api('orders/o/lines','PUT',{version:old.version,lines:[]},409);
   await api('orders/o','PATCH',{version:old.version,discountCents:1},409);
+  const decisions = [{id:'l',approval:'APPROVED',completed:true}, {id:'p',approval:'APPROVED',completed:true,partSource:'SERVICE'}];
+  for (const incomplete of [{}, {decisions}, {decisions:[],discountCents:0}, {decisions:decisions.slice(0,1),discountCents:0},
+    {decisions:[decisions[0],{id:'p',approval:'APPROVED',completed:true}],discountCents:0}]) {
+    await api('orders/o/review-finances','POST',{version:old.version,...incomplete},422);
+    expect(await api('orders/o')).toEqual(old);
+    expect(await api('overview')).toMatchObject({money:{debtCents:600000}});
+  }
   let order = await api('orders/o/payments','POST',{version:old.version,requestId:'late',amountCents:100000});
   db.sqlite.exec("UPDATE Payment SET occurredAt='2026-11-01T00:00:00.000Z' WHERE kind='PAYMENT'");
   expect(order.totals.balanceCents).toBe(500000); expect(order.financialMode).toBe('LEGACY');
-  order = await api('orders/o/review-finances','POST',{version:order.version,decisions:[{id:'l',approval:'APPROVED',completed:true}]});
+  order = await api('orders/o/review-finances','POST',{version:order.version,decisions,discountCents:0});
   expect(order.financialMode).toBe('WORKFLOW'); expect(order.totals.balanceCents).toBe(500000);
   expect(order.legacySnapshot?.balanceCents).toBe(600000); expect(order.closedAt).toBe(old.closedAt);
   expect(order.payments!.find(p=>p.kind==='OPENING')).toMatchObject({unallocatedCents:400000,occurredAt:null});
-  expect(order.payments!.find(p=>p.kind==='PAYMENT')).toMatchObject({laborCents:100000});
-  expect(await api('overview')).toMatchObject({money:{totalCents:500000,laborCents:100000,unallocatedCents:400000}});
-  expect(await api('overview?from=2026-01-01&to=2026-12-31')).toMatchObject({counts:{completed:0},money:{totalCents:100000,laborCents:100000,unallocatedCents:0,debtCents:500000}});
+  expect(order.payments!.find(p=>p.kind==='PAYMENT')).toMatchObject({laborCents:90000,partsCents:10000});
+  expect(await api('overview')).toMatchObject({money:{totalCents:500000,laborCents:90000,partsCents:10000,unallocatedCents:400000}});
+  expect(await api('overview?from=2026-01-01&to=2026-12-31')).toMatchObject({counts:{completed:0},money:{totalCents:100000,laborCents:90000,partsCents:10000,unallocatedCents:0,debtCents:500000}});
 });
 
 it('applies the labor discount and filters service parts and consent before distributing each new payment', async () => {
@@ -83,4 +91,18 @@ it('applies the labor discount and filters service parts and consent before dist
   for (const requestId of ['large1','large2']) order = await api(path+'/payments','POST',{version:order.version,requestId,amountCents:600000000});
   expect(order.paidCents).toBe(1200300000);
   expect(await api('overview')).toMatchObject({money:{totalCents:1200300000,debtCents:0}});
+});
+
+it('возвращает код конфликта при записи после конкурентной транзакции, сохраняя журнал и ввод другого окна', async () => {
+  const order = await intake(), path = 'orders/'+order.id;
+  const changed = afterRead(db,/SELECT \* FROM WorkOrder WHERE id=/,() => {
+    db.sqlite.prepare("UPDATE WorkOrder SET version=version+1,recommendations='Другой осмотр' WHERE id=?").run(order.id);
+  });
+  const payload = {requestId:'pay',version:order.version,amountCents:500};
+  expect(await api(path+'/payments','POST',payload,409)).toMatchObject({code:'VERSION_CONFLICT'});
+  expect(changed()).toBe(true);
+  const fresh = await api(path);
+  expect(fresh).toMatchObject({recommendations:'Другой осмотр',payments:[]});
+  await api(path+'/payments','POST',{...payload,version:fresh.version});
+  expect(await api(path+'/payments','POST',{...payload,amountCents:600},409)).toMatchObject({code:'IDEMPOTENCY_MISMATCH'});
 });

@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { serviceTimezone } from "../../../shared/service-time";
 import { X, Search, ChevronLeft, ChevronRight } from "lucide-react";
 export function Field({
   label,
@@ -140,7 +141,7 @@ export type Period = { kind: "today" | "month" | "custom" | "all"; from: string;
 export const allDates: Period = { kind: "all", from: "", to: "" };
 
 export function calendarDay() {
-  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Kaliningrad" }).format();
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: serviceTimezone }).format();
 }
 
 export function periodQuery(period: Period): URLSearchParams {

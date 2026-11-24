@@ -9,7 +9,7 @@ import { dateFilter, financeCTE } from './overview';
 import { textSearch } from './search';
 import { assertReviewed, paidFromLedger, pendingAllocations, totalsForOrder } from './finances';
 export { totalsForOrder } from './finances';
-import { body, fail, json, pagination, requireRole } from './common';
+import { body, fail, versionConflict, json, pagination, requireRole } from './common';
 import { all, first, guarded, now, stmt, uuid } from './db';
 import type { Context, D1PreparedStatement } from './types';
 
@@ -86,7 +86,7 @@ function auditStatement(ctx: Context, id: string, action: string, data: unknown)
   return stmt(ctx.env.DB, 'INSERT INTO AuditEvent(id,actorId,action,entityType,entityId,data,createdAt) VALUES(?,?,?,?,?,?,?)', [uuid(), ctx.actor.id, action, 'WorkOrder', id, JSON.stringify(data), now()]);
 }
 function checkMutable(order: OrderDetail, version: number, allowClosed = false) {
-  if (order.version !== version) fail(409, 'Заказ изменён другим сотрудником. Обновите данные');
+  if (order.version !== version) versionConflict();
   if (!allowClosed && order.status === 'CANCELLED') fail(409, 'Отменённый заказ нельзя изменять');
 }
 /** Atomically validates the snapshot, increments the version, writes children and audits. */
@@ -297,16 +297,22 @@ export async function handleOrders(ctx: Context): Promise<Response | null> {
   if (match[2] === 'review-finances' && method === 'POST') {
     requireRole(ctx.actor, 'ADMIN', 'RECEPTION');
     const input = z.strictObject({
-      version:versionField, discountCents:cents.default(0),
+      version:versionField, discountCents:cents,
       decisions:z.array(z.strictObject({id:idField, approval:z.enum(['PENDING','APPROVED','DEFERRED']),
-        completed:z.boolean(), partSource:z.enum(['SERVICE','CUSTOMER']).default('SERVICE')})).max(300).default([]),
+        completed:z.boolean(), partSource:z.enum(['SERVICE','CUSTOMER']).optional()})).max(300),
     }).parse(await body(ctx.request));
     const order = await loadOrder(ctx,id);
+    checkMutable(order,input.version);
     if (order.financialMode !== 'LEGACY') fail(409,'Расчёт уже проверен');
     const decisions = new Map(input.decisions.map(d=>[d.id,d]));
-    if (decisions.size !== input.decisions.length || input.decisions.some(d=>!order.lines.some(l=>l.id===d.id)))
-      fail(422,'Некорректные идентификаторы строк');
-    const lines = order.lines.map(line=>({...line,...decisions.get(line.id!)}));
+    if (decisions.size !== input.decisions.length || decisions.size !== order.lines.length)
+      fail(422,'Укажите решение для каждой позиции ровно один раз');
+    const lines = order.lines.map((line): OrderLine => {
+      const decision = decisions.get(line.id!);
+      if (!decision || (line.kind === 'PART' && !decision.partSource))
+        fail(422,'Укажите решение по каждой позиции и источник каждой детали');
+      return {...line,...decision,partSource:line.kind === 'PART' ? decision.partSource : 'SERVICE'};
+    });
     const totals = totalsForOrder({...order,financialMode:'WORKFLOW',lines,discountCents:input.discountCents});
     const writes = [
       stmt(ctx.env.DB,"UPDATE WorkOrder SET financialMode='WORKFLOW',discountCents=? WHERE id=?",[input.discountCents,id]),

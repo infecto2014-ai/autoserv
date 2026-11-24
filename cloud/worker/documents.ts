@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {body,fail,json,requireRole} from './common';
+import {body,fail, versionConflict,json,requireRole} from './common';
 import {first,stmt,uuid,now} from './db';
 import {loadOrder,mutateOrder,versionField} from './orders';
 import {assertReviewed, totalsForOrder} from './finances';
@@ -18,7 +18,7 @@ export interface FontBytes {regular:Uint8Array;bold:Uint8Array}
 async function saveDocument(ctx: Context, fonts: FontBytes, id: string, input: z.infer<typeof createSchema>,
   recordDelivery?: (orderId: string, documentId: string) => D1PreparedStatement): Promise<DocumentMeta> {
   const order = await loadOrder(ctx,id);
-  if(order.version !== input.version) fail(409,'Заказ изменён. Обновите страницу');
+  if(order.version !== input.version) versionConflict();
   if(input.kind === 'WORK_ORDER') {
     assertReviewed(order);
     if(order.status === 'CANCELLED') fail(409,'Заказ отменён');

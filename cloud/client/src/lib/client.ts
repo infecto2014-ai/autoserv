@@ -1,10 +1,15 @@
+import { serviceTimezone } from '../../../shared/service-time';
 export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
   }
+}
+export function isVersionConflict(error: unknown) {
+  return error instanceof ApiError && error.status === 409 && error.code === "VERSION_CONFLICT";
 }
 export async function api<T>(
   path: string,
@@ -24,6 +29,7 @@ export async function api<T>(
     throw new ApiError(
       value.error || "Не удалось выполнить запрос",
       response.status,
+      value.code,
     );
   }
   return response.json();
@@ -49,15 +55,6 @@ export const roles = {
   RECEPTION: "Приёмщик",
   MASTER: "Мастер",
 };
-let serviceTimezone = "Europe/Kaliningrad";
-export function configureTimezone(value: string) {
-  try {
-    new Intl.DateTimeFormat("ru-RU", { timeZone: value }).format();
-    serviceTimezone = value;
-  } catch {
-    /* Keep the validated default if the server returns an unsupported zone. */
-  }
-}
 export function date(value: string) {
   return new Date(value).toLocaleDateString("ru-RU", {
     timeZone: serviceTimezone,

@@ -41,3 +41,9 @@ it('reports debt and receipts from the same instant across a committed payment',
     expect(await (await overview(ctx)).json()).toMatchObject({money:{debtCents:0,totalCents:100}});
   }finally{db.close();}
 });
+
+it('использует историческую границу калининградских суток для фильтра визитов', async () => {
+  const {dateFilter} = await import('../worker/overview');
+  expect(dateFilter(new Request('https://crm.test/api/orders?from=2013-11-01&to=2013-11-01'),'openedAt').args)
+    .toEqual(['2013-10-31T21:00:00.000Z','2013-11-01T21:00:00.000Z']);
+});

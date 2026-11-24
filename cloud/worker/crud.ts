@@ -1,3 +1,4 @@
+import {serviceTimezone} from '../shared/service-time';
 import { z } from 'zod';
 import { calculateTotals } from '../shared/money';
 import type { LegacyFinancialSnapshot, OrderDetail } from '../shared/types';
@@ -5,7 +6,7 @@ import { dateFilter, financeCTE } from './overview';
 import { totalsForOrder } from './finances';
 import { textSearch } from './search';
 import type { Context, D1Database, D1PreparedStatement, Actor } from './types';
-import { body, fail, json, requireRole, pagination } from './common';
+import { body, fail, versionConflict, json, requireRole, pagination } from './common';
 import { all, first, stmt, batch, guarded, uuid, now } from './db';
 
 type Row = Record<string, any>;
@@ -27,8 +28,7 @@ export const staffCreate = z.union([
 export const staffPatch = z.strictObject({ name: required(200).optional(), role: role.optional(), active: z.boolean().optional() }).refine(v => Object.keys(v).length > 0, 'Нет изменений');
 export const catalogCreate = z.strictObject({ category: required(100), name: required(200), unit: required(30).optional(), laborPriceCents: money.optional(), sortOrder: z.number().int().min(0).max(1000000).optional() });
 export const catalogPatch = catalogCreate.partial().extend({ active: z.boolean().optional() }).refine(v => Object.keys(v).length > 0, 'Нет изменений');
-export function validTimezone(value: string) { try { new Intl.DateTimeFormat('en', { timeZone: value }); return value === 'UTC' || value.includes('/'); } catch { return false; } }
-export const settingsPatch = z.strictObject({ name: required(200).optional(), address: text(1000).optional(), phone: text(50).optional(), taxId: text(30).optional(), timezone: required(100).refine(validTimezone, 'Укажите IANA часовой пояс').optional() }).refine(v => Object.keys(v).length > 0, 'Нет изменений');
+export const settingsPatch = z.strictObject({ name: required(200).optional(), address: text(1000).optional(), phone: text(50).optional(), taxId: text(30).optional(), timezone: z.literal(serviceTimezone, {error:'Часовой пояс сервиса — Europe/Kaliningrad'}).optional() }).refine(v => Object.keys(v).length > 0, 'Нет изменений');
 const staffColumns = "id,name,CASE WHEN email LIKE 'directory:%' THEN '' ELSE email END AS email,role,active";
 const bools = (r: Row) => ({ ...r, active: !!r.active });
 function scope(actor: Actor, entity: 'Customer'|'Vehicle', alias: string): {sql:string,args:unknown[]} {
@@ -139,21 +139,35 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
     }
     if((method==='POST' && !key) || (method==='PATCH' && key)) {
       requireRole(actor,'ADMIN','RECEPTION');
-      const input:Row = (table==='Customer' ? (key?customerPatch:customerCreate) : (key?vehiclePatch:vehicleCreate)).parse(await body(request));
+      const payload = await body(request);
+      const {expected, ...changes} = payload;
+      const input:Row = (table==='Customer' ? (key?customerPatch:customerCreate) : (key?vehiclePatch:vehicleCreate)).parse(key ? changes : payload);
       const time=now(), entityId=key??uuid(),before=key?await get(db,table,key):null;
       const {archived,...fields}=input;
       if(table==='Customer' && fields.phone) fields.phoneNormalized=fields.phone.replace(/\D/g,'');
       const statements:D1PreparedStatement[]=[];
       let condition='SELECT 1',conditionArgs:unknown[]=[];
+      if (before) {
+        const originals = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).safeParse(expected);
+        const keys = Object.keys(input);
+        if (!originals.success || Object.keys(originals.data).length !== keys.length || keys.some(k => !Object.hasOwn(originals.data,k)))
+          fail(422,'Обновите карточку и передайте исходные значения изменяемых полей');
+        const predicates = keys.map(k => {
+          const original = originals.data[k];
+          if (original !== (k === 'archived' ? !!before.archivedAt : before[k])) versionConflict();
+          return k === 'archived' ? '(archivedAt IS NOT NULL) IS ?' : k+' IS ?';
+        });
+        condition = 'SELECT EXISTS(SELECT 1 FROM '+table+' WHERE id=? AND '+predicates.join(' AND ')+')';
+        conditionArgs = [entityId,...keys.map(k => typeof originals.data[k] === 'boolean' ? Number(originals.data[k]) : originals.data[k])];
+      }
       if(table==='Vehicle') {
         if(before && fields.mileage!==undefined && fields.mileage<before.mileage) fail(422,'Пробег не может быть меньше последнего зафиксированного');
         const owner=fields.customerId ?? before?.customerId;
         if(!before || (fields.customerId && fields.customerId!==before.customerId)) {
           if(!await first(db,'SELECT id FROM Customer WHERE id=? AND archivedAt IS NULL',[owner])) fail(422,'Выберите активного клиента');
-          condition='SELECT EXISTS(SELECT 1 FROM Customer WHERE id=? AND archivedAt IS NULL)';conditionArgs=[owner];
+          condition=`SELECT (${condition}) AND EXISTS(SELECT 1 FROM Customer WHERE id=? AND archivedAt IS NULL)`;conditionArgs.push(owner);
           if(before) { statements.push(stmt(db,'UPDATE VehicleOwnership SET endedAt=? WHERE vehicleId=? AND endedAt IS NULL',[time,key]),audit(db,actor,'OWNER_CHANGE','Vehicle',entityId,{from:before.customerId,to:owner})); }
         }
-        if(before) { condition=`SELECT (${condition}) AND EXISTS(SELECT 1 FROM Vehicle WHERE id=? AND customerId=? AND mileage=? AND updatedAt=?)`;conditionArgs.push(entityId,before.customerId,before.mileage,before.updatedAt); }
       }
       if(archived!==undefined) fields.archivedAt=archived?time:null;
       fields.updatedAt=time;
@@ -200,8 +214,8 @@ export async function handleCrud(ctx: Context): Promise<Response|null> {
     if((method==='POST' && !key)||(method==='PATCH' && key)) {requireRole(actor,'ADMIN');const input=(key?catalogPatch:catalogCreate).parse(await body(request)),entityId=key??uuid(),before=key?await get(db,'CatalogItem',key):null;await batch(db,[key?update(db,'CatalogItem',key,input):insert(db,'CatalogItem',{id:entityId,unit:'шт.',laborPriceCents:0,active:1,sortOrder:0,...input}),audit(db,actor,key?'UPDATE':'CREATE','CatalogItem',entityId,{...input,...(before && input.laborPriceCents!==undefined?{previousLaborPriceCents:before.laborPriceCents}:{})})]);return json(bools(await get(db,'CatalogItem',entityId)),key?200:201);}
   }
   if(resource==='settings' && !key) {
-    if(method==='GET') {requireRole(actor,'ADMIN','RECEPTION');return json(await get(db,'ServiceSettings','main'));}
-    if(method==='PATCH') {requireRole(actor,'ADMIN');const input=settingsPatch.parse(await body(request));await batch(db,[update(db,'ServiceSettings','main',input),audit(db,actor,'UPDATE','ServiceSettings','main',input)]);return json(await get(db,'ServiceSettings','main'));}
+    if(method==='GET') {requireRole(actor,'ADMIN','RECEPTION');return json({...await get(db,'ServiceSettings','main'),timezone:serviceTimezone});}
+    if(method==='PATCH') {requireRole(actor,'ADMIN');const input=settingsPatch.parse(await body(request));await batch(db,[update(db,'ServiceSettings','main',input),audit(db,actor,'UPDATE','ServiceSettings','main',input)]);return json({...await get(db,'ServiceSettings','main'),timezone:serviceTimezone});}
   }
   return null;
 }

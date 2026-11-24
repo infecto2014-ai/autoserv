@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {allocatePayment} from '../shared/workflow-money';
-import {body, fail, requireRole} from './common';
+import {body, fail, versionConflict, requireRole} from './common';
 import {now, stmt, uuid} from './db';
 import {refundAllocation} from './finances';
 import {cents, loadOrder, mutateOrder, versionField} from './orders';
@@ -17,7 +17,7 @@ export async function postPayment(ctx: Context, id: string) {
   const input = schema.parse(await body(ctx.request));
   return withRequest(ctx,'PAYMENT',input.requestId,{orderId:id,...input},async record => {
     const order = await loadOrder(ctx,id);
-    if (order.version !== input.version) fail(409,'Заказ изменён. Обновите данные');
+    if (order.version !== input.version) versionConflict();
     const paid = order.paidCents + (input.kind === 'REFUND' ? -input.amountCents : input.amountCents);
     if (!Number.isSafeInteger(paid) || paid < 0) fail(422,'Недопустимый остаток оплаты');
     let allocation, related: string | null = null, reason: string | null = null;

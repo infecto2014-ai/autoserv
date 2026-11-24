@@ -124,6 +124,7 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await page.getByLabel("Группа заказа").selectOption("READY");
   await page.getByRole("button", { name: "Выдать автомобиль" }).click();
   const delivery = page.getByRole("dialog", { name: "Выдача автомобиля" });
+  await expect(delivery.locator('dl div').filter({hasText:'Скидка на работы'})).toContainText(money(200));
   await expect(delivery).toContainText(money(1300));
   await expect(delivery.getByLabel(/Включить рекомендации/)).not.toBeChecked();
   await delivery.getByLabel(/Включить рекомендации/).check();
@@ -155,9 +156,21 @@ test("приёмщик выдаёт автомобиль с долгом, про
   const confirmSettlement = await loseFirstResponse(page, "**/api/orders/*/payments", 200);
   await page.getByRole("button", { name: "Записать оплату" }).click();
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("Повторите отправку");
+  const other = await page.context().newPage();
+  await other.goto(orderUrl);
+  await other.getByLabel("Примечание Масло моторное", {exact:true}).fill("Проверено во втором окне");
+  await other.getByLabel("Рекомендации клиенту").fill("Совет из второго окна");
+  await expect(other.getByText("Все изменения сохранены")).toBeVisible();
   await page.getByRole("button", { name: "Повторить отправку" }).click();
   await expect(page.locator(".total-balance")).toContainText(money(0));
   await confirmSettlement();
+  await page.getByRole("tab", { name: /^Осмотр/ }).click();
+  await page.getByLabel("Примечание Масло моторное", {exact:true}).fill("Дополнение из первого окна");
+  await expect(page.getByText("Все изменения сохранены")).toBeVisible();
+  await other.reload();
+  await expect(other.getByLabel("Рекомендации клиенту")).toHaveValue("Совет из второго окна");
+  await expect(other.getByLabel("Примечание Масло моторное", {exact:true})).toHaveValue("Дополнение из первого окна");
+  await other.close();
 
   await page.getByRole("link", { name: "Клиенты и авто" }).click();
   await page.getByLabel("Поиск клиентов и авто").fill("александр ёлкин");
@@ -192,5 +205,73 @@ test("приёмщик выдаёт автомобиль с долгом, про
   await refund.getByRole("button", { name: "Записать возврат" }).click();
   await expect(page.getByRole("row").filter({ hasText: "Корректировка платежа" })).toBeVisible();
   await expect(page.locator(".total-balance")).toContainText(money(50));
+  await discount.fill("0");
+  await page.getByRole("button", { name: "Сохранить скидку" }).click();
+  await expect(page.locator(".total-final")).toContainText(money(2000));
+  await works.getByLabel("Решение клиента").first().selectOption("DEFERRED");
+  await page.getByRole("button", { name: "Сохранить строки" }).click();
+  await expect(page.locator(".total-final")).toContainText(money(0));
+  await expect(page.getByText(/Переплата.*1\s750,00/)).toBeVisible();
   expect(browserErrors).toEqual([]);
+});
+
+test("две карточки клиента совмещают телефон с комментарием и сохраняют ввод при конфликте телефона", async ({ page }) => {
+  const second = await page.context().newPage();
+  await page.goto("/");
+  const created = await page.request.post("/api/intake", {
+    headers: { origin: new URL(page.url()).origin },
+    data: { requestId: "directory-race", make: "Лада", name: "Карточка для сверки", phone: "70000003001", complaint: "Осмотр" },
+  });
+  expect(created.status()).toBe(201);
+  const order = await created.json();
+  for (const view of [page, second]) {
+    await view.goto("/#directory");
+    await view.getByLabel("Поиск клиентов и авто").fill("Карточка для сверки");
+    await view.getByRole("button", {name:"Изменить",exact:true}).click();
+  }
+  const firstForm = page.getByRole("dialog"), secondForm = second.getByRole("dialog");
+  await firstForm.getByLabel("Телефон").fill("70000003002");
+  await firstForm.getByRole("button",{name:"Сохранить",exact:true}).click();
+  await expect(firstForm).toHaveCount(0);
+  await secondForm.getByLabel("Комментарий").fill("Перезвонить вечером");
+  await secondForm.getByRole("button",{name:"Сохранить",exact:true}).click();
+  await expect(secondForm).toHaveCount(0);
+  const path = "/api/customers/"+order.customer.id;
+  expect(await (await page.request.get(path)).json()).toMatchObject({phone:"70000003002",comment:"Перезвонить вечером"});
+  for (const view of [page, second]) await view.getByRole("button",{name:"Изменить",exact:true}).click();
+  await firstForm.getByLabel("Телефон").fill("70000003003");
+  await firstForm.getByRole("button",{name:"Сохранить",exact:true}).click();
+  await expect(firstForm).toHaveCount(0);
+  await secondForm.getByLabel("Телефон").fill("70000003004");
+  await secondForm.getByRole("button",{name:"Сохранить",exact:true}).click();
+  await expect(secondForm.getByRole("alert")).toContainText("Данные изменились");
+  await expect(secondForm.getByLabel("Телефон")).toHaveValue("70000003004");
+  second.once("dialog", dialog => dialog.accept());
+  await secondForm.getByRole("button",{name:"Загрузить актуальную карточку"}).click();
+  await expect(secondForm.getByLabel("Телефон")).toHaveValue("70000003003");
+  await expect(secondForm.getByLabel("Комментарий")).toHaveValue("Перезвонить вечером");
+  await second.close();
+});
+
+test("устаревшая строка остаётся в форме после правки заказа другим окном", async ({page}) => {
+  await page.goto("/");
+  const response = await page.request.post("/api/intake", { headers: { origin: new URL(page.url()).origin },
+    data: {requestId:"lines-race", make:"Лада", complaint:"Сверка строк", phone:"70000005001"} });
+  expect(response.status()).toBe(201);
+  const order = await response.json();
+  const url = "/#orders/"+order.id;
+  await page.goto(url);
+  await page.getByRole("tab",{name:/Работы и запчасти/}).click();
+  await page.getByRole("button",{name:"Добавить работу"}).click();
+  await page.getByLabel("Наименование").fill("Диагностика колеса");
+  const second = await page.context().newPage();
+  await second.goto(url);
+  await second.getByLabel("Рекомендации клиенту").fill("Проверить давление");
+  await expect(second.getByText("Все изменения сохранены")).toBeVisible();
+  await page.getByRole("button",{name:"Сохранить строки"}).click();
+  await expect(page.getByRole("button",{name:"Загрузить актуальную версию"})).toBeVisible();
+  await expect(page.getByLabel("Наименование")).toHaveValue("Диагностика колеса");
+  await expect(page.getByRole("button",{name:"Сохранить строки"})).toBeDisabled();
+  expect(await (await page.request.get("/api/orders/"+order.id)).json()).toMatchObject({lines:[],recommendations:"Проверить давление"});
+  await second.close();
 });

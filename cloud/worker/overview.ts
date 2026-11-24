@@ -1,3 +1,4 @@
+import {serviceTimezone} from '../shared/service-time';
 import {fail, json, requireRole} from './common';
 import {stmt} from './db';
 import type {Context} from './types';
@@ -20,6 +21,19 @@ export const financeCTE = `WITH prices AS (
   FROM WorkOrder w LEFT JOIN ledger ON ledger.orderId=w.id LEFT JOIN prices p ON p.orderId=w.id LEFT JOIN LegacyFinancialSnapshot s ON s.orderId=w.id
 )`;
 
+const serviceDay = new Intl.DateTimeFormat('sv-SE', {timeZone:serviceTimezone});
+// Locate local midnight even for visits before Kaliningrad changed its UTC offset.
+function dayStart(utcMidnight: number) {
+  const day = serviceDay.format(utcMidnight + 3600000 * 12);
+  let low = utcMidnight - 86400000, high = utcMidnight + 86400000;
+  while (high - low > 1) {
+    const middle = Math.floor((high + low) / 2);
+    if (serviceDay.format(middle) < day) low = middle;
+    else high = middle;
+  }
+  return new Date(high).toISOString();
+}
+
 export function dateFilter(request: Request, column: string) {
   const params = new URL(request.url).searchParams, clauses: string[] = [], args: string[] = [];
   const from = params.get('from'), to = params.get('to');
@@ -28,8 +42,7 @@ export function dateFilter(request: Request, column: string) {
     const utc = Date.parse(day + 'T00:00:00Z');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(utc) || new Date(utc).toISOString().slice(0,10) !== day)
       fail(422, 'Укажите календарную дату в формате ГГГГ-ММ-ДД');
-    const boundary = utc - 2 * 3600000 + (last ? 86400000 : 0);
-    clauses.push(column + (last ? '<?' : '>=?')); args.push(new Date(boundary).toISOString());
+    clauses.push(column + (last ? '<?' : '>=?')); args.push(dayStart(utc + (last ? 86400000 : 0)));
   }
   if (from && to && from > to) fail(422,'Начало периода позже окончания');
   return {sql:clauses.join(' AND ') || '1',args};
